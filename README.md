@@ -20,9 +20,6 @@ Rust fmt/check/test/Clippy прошли; CSV preview, обучение и пре
 - Таблицы коэффициентов и **обучающих** метрик RMSE/R². Это не оценка на test set.
 - CLI `validate`, `run`, `inspect`; ошибки приводят к ненулевому exit code.
 
-Каталог старых нод сохранён в `SPARK_NODES_SPECIFICATION.md`. Его Scala-фрагменты
-не копировались в worker; реализован новый минимальный набор операций.
-
 ## Требования и сборка
 
 Нужны Rust stable с Cargo, rustfmt и Clippy, JDK 17 или 21, sbt 1.10.11.

@@ -11,6 +11,7 @@ __pycache__/
 
 # Local reference archive, credentials, editor state and runtime files.
 /code-generation-standards_v4.zip
+/SPARK_NODES_SPECIFICATION.md
 .env
 .env.*
 !.env.example
