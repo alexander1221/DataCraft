@@ -1,0 +1,23 @@
+/target/
+/.tools/
+/workers/spark/target/
+/workers/spark/project/target/
+/workers/spark/project/project/
+/workers/spark/spark-warehouse/
+/spark-warehouse/
+/artifacts/
+*.log
+__pycache__/
+
+# Local reference archive, credentials, editor state and runtime files.
+/code-generation-standards_v4.zip
+.env
+.env.*
+!.env.example
+/.aws/
+/.codex/
+.idea/
+.bsp/
+.metals/
+*.tmp
+*.dcraft.bak

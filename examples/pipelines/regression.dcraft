@@ -1,0 +1,84 @@
+{
+  "format_version": 1,
+  "name": "DataCraft regression",
+  "nodes": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "position": [
+        0.0,
+        0.0
+      ],
+      "config": {
+        "kind": "csv_source",
+        "path": "../data/sales.csv",
+        "header": true,
+        "infer_schema": true
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "position": [
+        240.0,
+        0.0
+      ],
+      "config": {
+        "kind": "select_columns",
+        "columns": [
+          "quantity",
+          "amount"
+        ]
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "position": [
+        480.0,
+        0.0
+      ],
+      "config": {
+        "kind": "assemble_features",
+        "columns": [
+          "quantity"
+        ],
+        "output_column": "features"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000004",
+      "position": [
+        720.0,
+        0.0
+      ],
+      "config": {
+        "kind": "linear_regression",
+        "label_column": "amount",
+        "features_column": "features",
+        "fit_intercept": true,
+        "max_iter": 100,
+        "reg_param": 0.0,
+        "elastic_net_param": 0.0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from_port": "table",
+      "to_port": "table",
+      "from": "00000000-0000-0000-0000-000000000001",
+      "to": "00000000-0000-0000-0000-000000000002"
+    },
+    {
+      "from_port": "table",
+      "to_port": "table",
+      "from": "00000000-0000-0000-0000-000000000002",
+      "to": "00000000-0000-0000-0000-000000000003"
+    },
+    {
+      "from_port": "table",
+      "to_port": "table",
+      "from": "00000000-0000-0000-0000-000000000003",
+      "to": "00000000-0000-0000-0000-000000000004"
+    }
+  ],
+  "output_node": "00000000-0000-0000-0000-000000000004"
+}

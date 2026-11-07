@@ -1,0 +1,17 @@
+[package]
+name = "datacraft-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "datacraft"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+datacraft-core.workspace = true
+datacraft-project.workspace = true
+datacraft-engine.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
