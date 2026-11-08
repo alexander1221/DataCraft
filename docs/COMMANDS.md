@@ -46,10 +46,12 @@ Metadata отделена от handlers. Все доступные команд�
 | project.save | сохранить по текущему пути | нет |
 | project.save_as | сохранить в указанный файл | нет |
 | execution.run | выполнить выбранную ветку через Spark | нет |
+| execution.node.run | строго одна нода с сохранёнными входами; node_id UUID | нет |
+| execution.downstream.run | нода и все потомки; внешние входы должны быть сохранены | нет |
 | execution.cancel | запросить остановку текущего Job ID | нет |
 | execution.status | получить JobInfo | нет |
 
-В реестре 18 команд. New принимает name и optional discard_changes (default false).
+В реестре 20 команд. New принимает name и optional discard_changes (default false).
 Пустое имя отвергается без изменения Session. New/Open запрещены при активном
 job, очищают history, завершённый job и предыдущие результаты. New сбрасывает
 path и saved checkpoint; до SaveAs проект dirty. Revision возрастает.

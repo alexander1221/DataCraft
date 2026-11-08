@@ -2,6 +2,10 @@
 
 ## Текущий фундамент
 
+Поузловой запуск с постоянным worker, materialized session cache, инвалидацией
+по зависимостям и статусами на canvas реализован. Межсессионный кэш и
+надёжные checkpoints на диске пока не реализованы: [NODE_EXECUTION.md](NODE_EXECUTION.md).
+
 NodeSpec, черновики, Session с командами/undo, фоновые jobs, отмена/timeout
 и xtask реализованы. Desktop создаёт проекты, добавляет/удаляет ноды, изменяет
 параметры и связи через Session, сохраняет граф и предоставляет Run/Cancel/preview.
@@ -32,16 +36,25 @@ RMSE/MSE/MAE/R² на явно поданном наборе. Три новых 
 Logistic Regression и Linear SVM (LinearSVC, L2, binary 0/1), Decision Tree
 Classifier и Random Forest Classifier (также multiclass), общий Predict и
 Classification Metrics. Четыре примера обучаются на train и оцениваются на test.
-Метрики: accuracy, weighted precision/recall/F1. Всего 24 типа нод.
+Метрики: accuracy, weighted precision/recall/F1.
 Контракты и ограничения: [CLASSIFICATION.md](CLASSIFICATION.md).
 Исходная L1 SVMWithSGD не переносилась дословно; эквивалентность не заявляется.
 
+## Отбор признаков: реализованный пакет
+
+Feature Selection возвращает bounded χ²-отчёт; Feature Selection Pipeline
+выбирает top-k на train и применяет fitted coding к test без target.
+Random Forest Pipeline отбирает компоненты ML-вектора по classification/regression
+importance. Отчёты доступны как outputs, обе pipeline-модели — через Transform.
+Всего 27 типов нод. Контракт: [FEATURE_SELECTION.md](FEATURE_SELECTION.md).
+Статистические допущения и ограничения не означают эквивалентность legacy нодам.
+
 ## Следующие пакеты Spark-нод
 
-1. **Отбор признаков:** Feature Selection, Feature Selection Pipeline,
-   Random Forest Pipeline с корректным разделением fit/transform.
-2. **Модели и совместимость:** сохранение/загрузка модели вместе с preprocessing,
+1. **Модели и совместимость:** сохранение/загрузка модели вместе с preprocessing,
    воспроизводимые параметры/схемы и проверка совместимости примеров.
+2. **Статистическая приёмка:** multiple-testing correction, информативные
+   diagnostics sparse contingency tables и отдельная оценка на реальных данных.
 
 Каждый пакет включает работающий backend, NodeSpec, параметры/порты GUI,
 пример pipeline и независимые проверки результатов. Не добавлять ноды-заглушки.

@@ -13,15 +13,18 @@ Session делает структурный preflight выбранной вет�
 публикует Queued и запускает два потока: runner и supervisor. Runner создаёт
 Worker, регистрирует cancellation handle, читает ответ и закрывает JVM.
 Supervisor ждёт Condvar, отменяет зарегистрированный процесс при cancel/timeout.
-Ни один mutex не удерживается во время запроса Worker::run.
-Только после cleanup публикуется Completed/Failed/Cancelled/TimedOut.
+Mutex статусов не удерживается во время запроса Worker::run.
+В поузловом режиме runner владеет отдельным mutex постоянного Worker;
+UI его не захватывает. Успех сохраняет JVM, cancel/timeout и сбой протокола
+завершают процесс до terminal status. Подробности: [NODE_EXECUTION.md](NODE_EXECUTION.md).
 
 ## §3. Применения
 
 GUI/MCP может dispatch Run, получить Job ID, продолжить редактирование и polling.
 CLI использует тот же Run и блокирующий wait вне GUI. Отмена работает при старте
 JVM и во время запроса; следующий job разрешён после terminal status.
-Каждый job использует собственный JVM, без пула и повторного использования.
+Обычный execution.run использует собственный JVM. Команды execution.node.run
+и execution.downstream.run переиспользуют отдельный worker текущего проекта.
 
 ## §4. Контракты
 
@@ -38,7 +41,7 @@ Timeout — время от принятия задания, включая за
 реального завершения runner. Нельзя выдавать неподтверждённую остановку за terminal.
 
 События: queued, started, stage, cancellation_requested, completed, failed,
-cancelled, timed_out. Stage — starting_worker/executing/stopping_worker,
+cancelled, timed_out; node содержит UUID и NodeStatus. Stage — starting_worker/executing/stopping_worker,
 не процент и не счётчик обработанных строк. Очередь ограничена 64 событиями
 текущего job; при переполнении удаляются старейшие, статус остаётся доступен.
 Менеджер хранит только текущий/последний job; новый заменяет terminal job.

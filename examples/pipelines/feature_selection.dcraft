@@ -1,0 +1,64 @@
+{
+  "format_version": 1,
+  "name": "DataCraft feature selection",
+  "nodes": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "position": [
+        40.0,
+        40.0
+      ],
+      "config": {
+        "kind": "json_source",
+        "path": "../data/selection.jsonl"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "position": [
+        380.0,
+        40.0
+      ],
+      "config": {
+        "kind": "filter",
+        "expression": "id <= 6"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "position": [
+        720.0,
+        40.0
+      ],
+      "config": {
+        "kind": "feature_selection",
+        "label_column": "target",
+        "columns": [
+          "signal",
+          "noise"
+        ],
+        "categorical_columns": [
+          "signal",
+          "noise"
+        ],
+        "num_buckets": 3,
+        "relative_error": 0.0
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "00000000-0000-0000-0000-000000000001",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000002",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000002",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000003",
+      "to_port": "table"
+    }
+  ],
+  "output_node": "00000000-0000-0000-0000-000000000003"
+}

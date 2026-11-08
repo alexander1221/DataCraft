@@ -1,5 +1,6 @@
 //! Presentation-only canvas. Persistent moves are dispatched by Desktop after drag ends.
 use datacraft_core::{Edge, Graph, Node, PortType};
+use datacraft_engine::node_runtime::NodeStatus;
 use eframe::egui::{
     self, Align2, Color32, FontId, PointerButton, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2,
 };
@@ -10,6 +11,8 @@ pub enum Action {
     Select(Uuid),
     Move(Uuid, [f32; 2]),
     Connect(Edge),
+    RunNode(Uuid),
+    RunDownstream(Uuid),
 }
 
 struct OutputPort {
@@ -31,6 +34,8 @@ pub struct Canvas {
     drag: Option<Drag>,
     connection: Option<OutputPort>,
     center: Vec2,
+    pub execution: BTreeMap<Uuid, NodeStatus>,
+    pub run_enabled: bool,
 }
 
 impl Default for Canvas {
@@ -42,6 +47,8 @@ impl Default for Canvas {
             drag: None,
             connection: None,
             center: egui::vec2(320.0, 240.0),
+            execution: BTreeMap::new(),
+            run_enabled: true,
         }
     }
 }
@@ -227,8 +234,12 @@ impl Canvas {
             if !bounds.intersects(rect) {
                 continue;
             }
+            let body = Rect::from_min_max(
+                bounds.min,
+                bounds.right_bottom() - egui::vec2(0.0, 28.0 * self.zoom),
+            );
             let hit = ui.interact(
-                bounds.intersect(rect),
+                body.intersect(rect),
                 ui.id().with(node.id),
                 Sense::click_and_drag(),
             );
@@ -251,7 +262,18 @@ impl Canvas {
                     self.drag = None;
                 }
             }
-            let accent = if selected == Some(node.id) {
+            let status = self.execution.get(&node.id).copied().unwrap_or_default();
+            let status_color = match status {
+                NodeStatus::Completed | NodeStatus::Succeeded => Color32::from_rgb(74, 210, 126),
+                NodeStatus::Failed => Color32::from_rgb(245, 91, 99),
+                _ => Color32::from_gray(130),
+            };
+            let accent = if matches!(
+                status,
+                NodeStatus::Completed | NodeStatus::Succeeded | NodeStatus::Failed
+            ) {
+                status_color
+            } else if selected == Some(node.id) {
                 Color32::from_rgb(97, 196, 255)
             } else {
                 Color32::from_gray(76)
@@ -263,13 +285,105 @@ impl Canvas {
                 Stroke::new(1.5_f32, accent),
                 StrokeKind::Inside,
             );
+            if selected == Some(node.id) {
+                painter.rect_stroke(
+                    bounds.expand(3.0 * self.zoom),
+                    7.0,
+                    Stroke::new(1.0_f32, Color32::from_rgb(97, 196, 255)),
+                    StrokeKind::Outside,
+                );
+            }
             let spec = node.config.spec();
+            painter
+                .with_clip_rect(Rect::from_min_max(
+                    bounds.min,
+                    bounds.max - egui::vec2(28.0 * self.zoom, 0.0),
+                ))
+                .text(
+                    bounds.min + egui::vec2(12.0, 18.0) * self.zoom,
+                    Align2::LEFT_CENTER,
+                    spec.label,
+                    FontId::proportional(15.0 * self.zoom),
+                    Color32::WHITE,
+                );
+            if status == NodeStatus::Running {
+                let center = bounds.right_top() + egui::vec2(-15.0, 18.0) * self.zoom;
+                let angle = ui.input(|i| i.time) as f32 * 5.0;
+                let points: Vec<_> = (0..24)
+                    .map(|i| {
+                        let a = angle + i as f32 * 0.2;
+                        center + egui::vec2(a.cos(), a.sin()) * (7.0 * self.zoom)
+                    })
+                    .collect();
+                painter.add(egui::Shape::line(
+                    points,
+                    Stroke::new(2.0 * self.zoom, Color32::from_rgb(108, 208, 255)),
+                ));
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(16));
+            }
+            for (index, downstream) in [false, true].into_iter().enumerate() {
+                let button = run_button(bounds, index, self.zoom);
+                let response = ui.interact(
+                    button.intersect(rect),
+                    ui.id().with((node.id, "run", downstream)),
+                    Sense::click(),
+                );
+                let enabled = self.run_enabled && ui.is_enabled();
+                let color = if enabled {
+                    Color32::from_rgb(73, 215, 126)
+                } else {
+                    Color32::from_gray(85)
+                };
+                painter.rect_filled(
+                    button,
+                    3.0,
+                    if response.hovered() && enabled {
+                        Color32::from_rgb(46, 82, 65)
+                    } else {
+                        Color32::from_rgb(24, 35, 34)
+                    },
+                );
+                let count = if downstream { 2 } else { 1 };
+                for part in 0..count {
+                    let start = button.center()
+                        + egui::vec2(
+                            if downstream {
+                                -7.0 + part as f32 * 7.0
+                            } else {
+                                -3.0
+                            },
+                            -5.0,
+                        ) * self.zoom;
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            start,
+                            start + egui::vec2(0.0, 10.0) * self.zoom,
+                            start + egui::vec2(7.0, 5.0) * self.zoom,
+                        ],
+                        color,
+                        Stroke::NONE,
+                    ));
+                }
+                if enabled && response.clicked() {
+                    actions.push(if downstream {
+                        Action::RunDownstream(node.id)
+                    } else {
+                        Action::RunNode(node.id)
+                    });
+                }
+                response.on_hover_text(if downstream {
+                    "Run this node and all descendants. Inputs outside the branch must be cached."
+                } else {
+                    "Run only this node. Run its input nodes first."
+                });
+            }
             painter.text(
-                bounds.min + egui::vec2(12.0, 18.0) * self.zoom,
+                bounds.left_bottom() + egui::vec2(80.0, -16.0) * self.zoom,
                 Align2::LEFT_CENTER,
-                spec.label,
-                FontId::proportional(15.0 * self.zoom),
-                Color32::WHITE,
+                status_label(status),
+                FontId::proportional(11.0 * self.zoom),
+                status_color,
             );
             for (ports, output) in [(spec.inputs, false), (spec.outputs, true)] {
                 for (index, p) in ports.iter().enumerate() {
@@ -359,8 +473,26 @@ pub(crate) fn size(node: &Node) -> Vec2 {
     let spec = node.config.spec();
     egui::vec2(
         200.0,
-        60.0 + 22.0 * spec.inputs.len().max(spec.outputs.len()) as f32,
+        88.0 + 22.0 * spec.inputs.len().max(spec.outputs.len()) as f32,
     )
+}
+fn run_button(bounds: Rect, index: usize, zoom: f32) -> Rect {
+    Rect::from_min_size(
+        bounds.left_bottom() + egui::vec2(12.0 + index as f32 * 30.0, -26.0) * zoom,
+        egui::vec2(24.0, 20.0) * zoom,
+    )
+}
+fn status_label(status: NodeStatus) -> &'static str {
+    match status {
+        NodeStatus::Idle => "",
+        NodeStatus::Queued => "Waiting",
+        NodeStatus::Running => "Running",
+        NodeStatus::Prepared => "Plan ready",
+        NodeStatus::Completed => "Done (cached)",
+        NodeStatus::Succeeded => "Done (pipeline)",
+        NodeStatus::Failed => "Failed",
+        NodeStatus::Cancelled => "Stopped",
+    }
 }
 fn port(rect: Rect, index: usize, output: bool, zoom: f32) -> Pos2 {
     Pos2::new(
@@ -372,6 +504,118 @@ fn port(rect: Rect, index: usize, output: bool, zoom: f32) -> Pos2 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn footer_buttons_emit_only_the_requested_run_and_obey_busy_state() {
+        let id = Uuid::from_u128(1);
+        let graph = Graph {
+            nodes: vec![Node {
+                id,
+                position: [0.0, 0.0],
+                config: datacraft_core::NodeKind::CsvSource {
+                    path: "local.csv".into(),
+                    header: true,
+                    infer_schema: true,
+                },
+            }],
+            edges: vec![],
+        };
+        let ctx = egui::Context::default();
+        let mut canvas = Canvas {
+            fit: false,
+            ..Default::default()
+        };
+        frame(&ctx, &mut canvas, &graph, vec![]);
+        let bounds = Rect::from_min_size(Pos2::new(32.0, 32.0), size(&graph.nodes[0]));
+        let actions = click(
+            &ctx,
+            &mut canvas,
+            &graph,
+            run_button(bounds, 0, 1.0).center(),
+        );
+        assert!(matches!(actions.as_slice(), [Action::RunNode(node)] if *node == id));
+        let actions = click(
+            &ctx,
+            &mut canvas,
+            &graph,
+            run_button(bounds, 1, 1.0).center(),
+        );
+        assert!(matches!(actions.as_slice(), [Action::RunDownstream(node)] if *node == id));
+        canvas.run_enabled = false;
+        assert!(click(
+            &ctx,
+            &mut canvas,
+            &graph,
+            run_button(bounds, 0, 1.0).center()
+        )
+        .is_empty());
+        assert!(canvas.drag.is_none());
+        assert_eq!(graph.nodes[0].position, [0.0, 0.0]);
+    }
+
+    #[test]
+    fn real_canvas_shapes_keep_neutral_fill_with_status_outlines_and_running_indicator() {
+        let id = Uuid::from_u128(7);
+        let graph = Graph {
+            nodes: vec![Node {
+                id,
+                position: [0.0, 0.0],
+                config: datacraft_core::NodeKind::TablePreview { rows: 5 },
+            }],
+            edges: vec![],
+        };
+        let ctx = egui::Context::default();
+        let mut canvas = Canvas {
+            fit: false,
+            ..Default::default()
+        };
+        for (status, outline, label) in [
+            (
+                NodeStatus::Completed,
+                Color32::from_rgb(74, 210, 126),
+                "Done (cached)",
+            ),
+            (NodeStatus::Failed, Color32::from_rgb(245, 91, 99), "Failed"),
+            (NodeStatus::Running, Color32::from_gray(76), "Running"),
+        ] {
+            canvas.execution.insert(id, status);
+            let out = ctx.run(
+                egui::RawInput {
+                    screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(640.0, 480.0))),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        canvas.show(ui, &graph, None);
+                    });
+                },
+            );
+            assert!(out
+                .shapes
+                .iter()
+                .any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == Color32::from_rgb(35,43,57))));
+            assert!(out
+                .shapes
+                .iter()
+                .any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.stroke.color == outline)));
+            assert!(
+                !out.shapes
+                    .iter()
+                    .any(|s| matches!(&s.shape, egui::Shape::Rect(r)
+                if r.fill == Color32::from_rgb(28,65,47) || r.fill == Color32::from_rgb(78,32,39)))
+            );
+            assert!(out
+                .shapes
+                .iter()
+                .any(|s| matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == label)));
+            if status == NodeStatus::Running {
+                assert!(out
+                    .shapes
+                    .iter()
+                    .any(|s| matches!(&s.shape, egui::Shape::Path(p) if p.points.len() == 24)));
+            }
+        }
+    }
 
     fn click(ctx: &egui::Context, canvas: &mut Canvas, graph: &Graph, pos: Pos2) -> Vec<Action> {
         frame(

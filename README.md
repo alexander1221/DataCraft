@@ -4,8 +4,8 @@
 основание на Rust и локальный Scala worker с Apache Spark. Добавлен первый
 desktop-клиент на eframe/egui для просмотра графа и запуска preview.
 
-**Статус:** работают визуальный редактор, подготовка признаков, регрессия и классификация.
-Проверены 108 Rust-тестов и 32 Scala/MUnit-теста с настоящим Spark на Windows/JDK 21.
+**Статус:** работают визуальный редактор, подготовка/отбор признаков, регрессия и классификация.
+Проверены 111 Rust-тестов и 40 Scala/MUnit-тестов с настоящим Spark на Windows/JDK 21.
 Rust fmt/check/Clippy и архитектурные проверки прошли; CSV/JSON preview,
 обучение, предсказание и fit/transform проверены через Rust CLI → worker.
 В текущей sandbox sbt заблокирован доступом к boot-кэшу; Scala скомпилирована
@@ -17,7 +17,7 @@ Rust fmt/check/Clippy и архитектурные проверки прошл�
 
 - UUID-идентификаторы нод, типизированные порты `Table` и `Model`, проверка DAG,
   обязательных входов, параметров, повторных соединений и ссылок.
-- Единый NodeSpec для 24 нод: порты/cardinality, параметры, defaults и
+- Единый NodeSpec для 27 нод: порты/cardinality, параметры, defaults и
   ограничения. Discovery через `datacraft nodes --json` без JVM.
 - JSON-проекты `.dcraft` версии 1 с координатами нод и относительными путями.
 - Сохранение черновиков с незаполненными параметрами/входами; диагностика
@@ -38,11 +38,14 @@ Rust fmt/check/Clippy и архитектурные проверки прошл�
 - Logistic Regression и Linear SVM для binary 0/1; Decision Tree Classifier и
   Random Forest Classifier также для multiclass. Общий Predict принимает classifiers.
 - Classification Metrics: accuracy, weighted precision/recall/F1 на поданном наборе.
+- Feature Selection: χ²-отчёт для categorical target; Feature Selection Pipeline:
+  train-only top-k и fitted Transform. Random Forest Pipeline отбирает компоненты
+  ML-вектора по importance для classification/regression.
 - Таблицы коэффициентов и **обучающих** метрик RMSE/R². Это не оценка на test set.
 - CLI `validate`, `run`, `inspect`; ошибки приводят к ненулевому exit code.
 - `cargo xtask`: контроль зависимостей слоёв, реестров команд/нод и эталонных
   pipeline через настоящий Spark с проверкой схем и значений.
-- Desktop: New/Open/Save, палитра 24 типов нод, создание/удаление, canvas
+- Desktop: New/Open/Save, палитра 27 типов нод, создание/удаление, canvas
   со связями, выбор/перемещение, редактируемые параметры с Apply/Revert,
   Connect/Disconnect, Undo/Redo, Run/Cancel и таблица результатов.
 - Асинхронные системные Open/Save as, Browse для CSV/Parquet/JSON и переименование
@@ -96,6 +99,10 @@ cargo run -p datacraft-cli -- run examples/pipelines/logistic_regression.dcraft
 cargo run -p datacraft-cli -- run examples/pipelines/linear_svc.dcraft
 cargo run -p datacraft-cli -- run examples/pipelines/decision_tree_classifier.dcraft
 cargo run -p datacraft-cli -- run examples/pipelines/random_forest_classifier.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/feature_selection.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/feature_selection_pipeline.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/random_forest_pipeline.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/random_forest_pipeline.dcraft --output 00000000-0000-0000-0000-000000000011
 cargo run -p datacraft-cli -- inspect examples/data/features.jsonl --rows 5
 cargo run -p datacraft-cli -- inspect examples/data/sales.csv --rows 5
 cargo run -p datacraft-desktop -- examples/pipelines/sample.dcraft
@@ -125,7 +132,8 @@ cargo run -p datacraft-engine --example job_lifecycle -- examples/pipelines/samp
 Второй пример проверяет отмену настоящего JVM, следующий запуск и устаревание
 результата при редактировании во время работы. CLI ждёт завершения фонового job;
 Desktop отдельно опрашивает status/events. Отмена завершает локальный JVM,
-новый job создаёт новый процесс.
+следующий запуск восстанавливает worker. Кнопки на нодах используют постоянный
+worker и поузловой кэш на время открытого проекта: [NODE_EXECUTION.md](docs/NODE_EXECUTION.md).
 
 `sample.dcraft`: CSV → Filter → Select Columns → Limit → Table Preview.
 Ожидаемые quantity: 4, 5, 6. `regression.dcraft` обучает зависимость
@@ -157,20 +165,21 @@ cargo xtask ci --with-spark
 - На Linux системный picker требует desktop portal/backend либо Zenity;
   при отсутствии выбора доступны Open path/Save path и ручное поле источника.
   Порты соединяются двумя нажатиями (выход → вход), drag-to-connect пока нет.
-  Train/test split и категоризация пока отсутствуют.
 - Preview ограничен 1000 строками и ответом 8 MiB. Это не ограничение памяти
   отдельной широкой строки, парсера или обучения модели.
 - Источники и промежуточные таблицы остаются внутри JVM; Rust получает только
   схемы и ограниченные результаты. Spark может читать весь CSV при inferSchema.
-- В Session один активный job. Каждый job создаёт JVM; между jobs нет кэша
-  DataFrame/моделей или пула процессов.
+- В Session один активный job. Обычный Run project создаёт отдельный JVM.
+  ▶ выполняет только ноду с готовыми кэшированными входами, ⏩ — её и потомков.
+  Для этих кнопок worker сохраняет модели и MEMORY_AND_DISK таблицы между jobs.
+  Материализация читает весь результат ноды; кэш не сохраняется между открытиями.
 - События сообщают этапы выполнения, а не процент/строки Spark. Ctrl+C-handler
   CLI пока отсутствует; cancellation/status доступны через API Session.
 - Timeout и отмена зависят от возможности ОС завершить процесс; terminal status
   публикуется после cleanup. Drop запрашивает best-effort stop; hosts должны
   дождаться shutdown перед выходом, если нужно подтверждение очистки.
-- Модели не сохраняются на диск. Параметры preprocessing надо переносить вместе
-  с моделью, когда появятся обучаемые преобразования.
+- Модели и fitted preprocessing сохраняются только в памяти worker,
+  экспорт моделей на диск пока отсутствует.
 - Сохранение черновиков
   допускает неподключённые ноды и незаполненные параметры, но отклоняет циклы,
   битые ссылки, несовместимые порты и нечисловые координаты/float-параметры.

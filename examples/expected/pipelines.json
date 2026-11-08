@@ -1,6 +1,6 @@
 {
   "format_version": 1,
-  "numerical_assumption": "ASSUMPTION: ML absolute tolerance 1e-6 is a provisional acceptance contract for Linear Regression and GLM, not a derived Spark solver error bound.",
+  "numerical_assumption": "ASSUMPTION: ML solver tolerance 1e-6 and analytical chi-square/p-value tolerance 1e-12 are provisional acceptance contracts, not derived Spark solver or special-function error bounds.",
   "pipelines": [
     {
       "project": "examples/pipelines/sample.dcraft",
@@ -511,6 +511,138 @@
             {
               "metric": "weighted_f1",
               "value": 1.0
+            }
+          ],
+          "absolute_tolerance": 0.0
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/feature_selection.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Feature selection",
+          "fields": [
+            {
+              "name": "feature",
+              "data_type": "string"
+            },
+            {
+              "name": "statistic",
+              "data_type": "double"
+            },
+            {
+              "name": "degrees_of_freedom",
+              "data_type": "long"
+            },
+            {
+              "name": "p_value",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "feature": "signal",
+              "statistic": 12.0,
+              "degrees_of_freedom": 4,
+              "p_value": 0.01735126523666451
+            },
+            {
+              "feature": "noise",
+              "statistic": 0.0,
+              "degrees_of_freedom": 2,
+              "p_value": 1.0
+            }
+          ],
+          "absolute_tolerance": 1e-12
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/feature_selection_pipeline.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Feature selection",
+          "fields": [
+            {
+              "name": "feature",
+              "data_type": "string"
+            },
+            {
+              "name": "statistic",
+              "data_type": "double"
+            },
+            {
+              "name": "degrees_of_freedom",
+              "data_type": "long"
+            },
+            {
+              "name": "p_value",
+              "data_type": "double"
+            },
+            {
+              "name": "selected",
+              "data_type": "boolean"
+            }
+          ],
+          "rows": [
+            {
+              "feature": "signal",
+              "statistic": 12.0,
+              "degrees_of_freedom": 4,
+              "p_value": 0.01735126523666451,
+              "selected": true
+            },
+            {
+              "feature": "noise",
+              "statistic": 0.0,
+              "degrees_of_freedom": 2,
+              "p_value": 1.0,
+              "selected": false
+            }
+          ],
+          "absolute_tolerance": 1e-12
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/random_forest_pipeline.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Feature selection",
+          "fields": [
+            {
+              "name": "feature_index",
+              "data_type": "long"
+            },
+            {
+              "name": "feature",
+              "data_type": "string"
+            },
+            {
+              "name": "importance",
+              "data_type": "double"
+            },
+            {
+              "name": "selected",
+              "data_type": "boolean"
+            }
+          ],
+          "rows": [
+            {
+              "feature_index": 0,
+              "feature": "noise",
+              "importance": 0.0,
+              "selected": false
+            },
+            {
+              "feature_index": 1,
+              "feature": "signal",
+              "importance": 1.0,
+              "selected": true
             }
           ],
           "absolute_tolerance": 0.0

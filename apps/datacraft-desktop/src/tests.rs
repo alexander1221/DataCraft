@@ -404,6 +404,127 @@ fn app() -> Desktop {
         None,
     )
 }
+
+#[cfg(feature = "spark-integration-tests")]
+#[test]
+fn node_run_button_uses_persistent_inputs_and_displays_success_and_failure() {
+    use datacraft_engine::{jobs::JobStatus, node_runtime::NodeStatus};
+    let mut app = app();
+    app.session.configure_worker(WorkerConfig {
+        java: std::env::var_os("DATACRAFT_JAVA").map_or_else(|| "java".into(), PathBuf::from),
+        classpath_file: std::env::var_os("DATACRAFT_WORKER_CLASSPATH").map_or_else(
+            || {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../workers/spark/target/classpath.txt")
+            },
+            PathBuf::from,
+        ),
+    });
+    let ctx = egui::Context::default();
+    fn press(app: &mut Desktop, ctx: &egui::Context, label: &str, downstream: bool) {
+        frame(app, ctx, vec![]);
+        let out = frame(app, ctx, vec![]);
+        let node = out
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if r.fill == Color32::from_rgb(35, 43, 57) && out.shapes.iter().any(|s| {
+                        matches!(&s.shape, egui::Shape::Text(t) if t.galley.job.text == label && r.rect.contains(t.pos + t.galley.size()*0.5))
+                    }) =>
+                {
+                    Some(r.rect)
+                }
+                _ => None,
+            })
+            .expect("visible idle node body");
+        let mut buttons: Vec<_> = out
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r)
+                    if (r.fill == Color32::from_rgb(24, 35, 34)
+                        || r.fill == Color32::from_rgb(46, 82, 65))
+                        && node.contains(r.rect.center()) =>
+                {
+                    Some(r.rect.center())
+                }
+                _ => None,
+            })
+            .collect();
+        buttons.sort_by(|a, b| a.x.total_cmp(&b.x));
+        assert_eq!(buttons.len(), 2);
+        click(app, ctx, buttons[usize::from(downstream)]);
+    }
+    fn wait(app: &mut Desktop, ctx: &egui::Context) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(90);
+        while app.active_job() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "node job did not terminate"
+            );
+            frame(app, ctx, vec![]);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        frame(app, ctx, vec![]);
+    }
+    let original = app.session.project().cloned();
+    press(&mut app, &ctx, "Filter", false);
+    assert!(app
+        .error
+        .as_ref()
+        .is_some_and(|e| e.contains("Run input node")));
+    assert!(app.session.current_job().is_none());
+    press(&mut app, &ctx, "CSV Source", false);
+    wait(&mut app, &ctx);
+    assert_eq!(
+        app.session.current_job().unwrap().status,
+        JobStatus::Completed
+    );
+    assert_eq!(
+        app.session.node_statuses()[&Uuid::from_u128(1)],
+        NodeStatus::Completed
+    );
+    assert_eq!(
+        app.session.node_statuses()[&Uuid::from_u128(2)],
+        NodeStatus::Idle
+    );
+    press(&mut app, &ctx, "Filter", true);
+    wait(&mut app, &ctx);
+    assert_eq!(
+        app.session.current_job().unwrap().status,
+        JobStatus::Completed
+    );
+    assert_eq!(
+        app.session.last_execution().unwrap().result.tables[0]
+            .rows
+            .iter()
+            .map(|r| r["quantity"].as_i64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![4, 5, 6]
+    );
+    assert_eq!(
+        app.session.project().cloned(),
+        original,
+        "execution controls must not move nodes or edit the graph"
+    );
+    app.dispatch(Command::ConfigureNode {
+        node_id: Uuid::from_u128(2),
+        config: datacraft_core::NodeKind::Filter {
+            expression: "absent > 0".into(),
+        },
+    });
+    press(&mut app, &ctx, "Filter", false);
+    wait(&mut app, &ctx);
+    assert_eq!(
+        app.session.node_statuses()[&Uuid::from_u128(2)],
+        NodeStatus::Failed
+    );
+    let out = frame(&mut app, &ctx, vec![]);
+    assert!(out.shapes.iter().any(
+        |s| matches!(&s.shape,egui::Shape::Rect(r) if r.stroke.color==Color32::from_rgb(245,91,99))
+    ));
+}
 #[test]
 fn canvas_and_inspector_render_without_java_or_project_mutation() {
     let mut app = app();
@@ -517,6 +638,84 @@ fn regression_metrics_run_button_displays_real_test_metrics_and_undefined_r2() {
 }
 
 mod file_dialogs;
+
+#[cfg(feature = "spark-integration-tests")]
+#[test]
+fn selection_run_button_displays_importance_and_real_transformed_test_vectors() {
+    let mut app = app();
+    app.open(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/pipelines/random_forest_pipeline.dcraft"),
+        true,
+    );
+    app.session.configure_worker(WorkerConfig {
+        java: std::env::var_os("DATACRAFT_JAVA").map_or_else(|| "java".into(), PathBuf::from),
+        classpath_file: std::env::var_os("DATACRAFT_WORKER_CLASSPATH").map_or_else(
+            || {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../workers/spark/target/classpath.txt")
+            },
+            PathBuf::from,
+        ),
+    });
+    let ctx = egui::Context::default();
+    let wait = |app: &mut Desktop| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(90);
+        while app.active_job() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "selection GUI job timed out"
+            );
+            frame(app, &ctx, Vec::new());
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        frame(app, &ctx, Vec::new());
+        assert_eq!(
+            app.session.current_job().unwrap().status,
+            datacraft_engine::jobs::JobStatus::Completed,
+            "{:?}",
+            app.error
+        );
+    };
+    click_label(&mut app, &ctx, "Run project");
+    assert!(app.active_job());
+    wait(&mut app);
+    let table = &app.session.last_execution().unwrap().result.tables[0];
+    assert_eq!(table.name, "Feature selection");
+    assert_eq!(
+        table
+            .rows
+            .iter()
+            .map(|r| r["importance"].as_f64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![0.0, 1.0]
+    );
+    assert_eq!(table.rows[1]["selected"], true);
+    let output = frame(&mut app, &ctx, Vec::new());
+    text_position(&output, "signal");
+    app.select(Uuid::from_u128(8));
+    click_label(&mut app, &ctx, "Run selected");
+    assert!(app.active_job());
+    wait(&mut app);
+    let table = &app.session.last_execution().unwrap().result.tables[0];
+    assert_eq!(table.rows.len(), 2);
+    assert_eq!(
+        table
+            .rows
+            .iter()
+            .map(|r| r["selected_features"]["values"][0].as_f64().unwrap())
+            .collect::<Vec<_>>(),
+        vec![1.0, 7.0]
+    );
+    let selected = table.schema["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["name"] == "selected_features")
+        .unwrap();
+    assert_eq!(selected["metadata"]["ml_attr"]["num_attrs"], 1);
+    assert!(app.session.result_is_current());
+}
 
 #[test]
 fn arrange_button_moves_branches_as_one_undo_and_leaves_computation_untouched() {
@@ -707,6 +906,9 @@ fn preprocessing_graph_renders_split_ports_and_generated_inspectors_without_java
         "linear_svc",
         "decision_tree_classifier",
         "random_forest_classifier",
+        "feature_selection",
+        "feature_selection_pipeline",
+        "random_forest_pipeline",
     ] {
         app.open(
             PathBuf::from(env!("CARGO_MANIFEST_DIR"))

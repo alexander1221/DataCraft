@@ -48,6 +48,8 @@ fn registry_matches_every_json_command_and_parameter_contract() {
             path: "copy.dcraft".into(),
         },
         Command::Run { output: None },
+        Command::RunNode { node_id: id },
+        Command::RunDownstream { node_id: id },
         Command::Cancel { job_id: id },
         Command::JobStatus { job_id: id },
         Command::New {

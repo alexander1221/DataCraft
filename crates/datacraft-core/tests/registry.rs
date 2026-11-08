@@ -15,6 +15,24 @@ fn public_catalog_matches_persistent_contract_and_ports() {
     // Independent contract table, not a snapshot generated from the registry.
     let expected = [
         (
+            "feature_selection",
+            vec![("table", PortType::Table)],
+            vec![],
+            true,
+        ),
+        (
+            "feature_selection_pipeline",
+            vec![("table", PortType::Table)],
+            vec![("table", PortType::Table), ("model", PortType::Model)],
+            true,
+        ),
+        (
+            "random_forest_pipeline",
+            vec![("table", PortType::Table)],
+            vec![("table", PortType::Table), ("model", PortType::Model)],
+            true,
+        ),
+        (
             "logistic_regression",
             vec![("table", PortType::Table)],
             vec![("model", PortType::Model)],
@@ -211,6 +229,21 @@ fn creation_defaults_and_typed_round_trip_cover_every_kind() {
             json!({"kind":"make_design_matrix","formula":"y ~ x","features_column":"features","label_column":"label","keep_unknown":false}),
         ),
         ("transform", json!({}), json!({"kind":"transform"})),
+        (
+            "feature_selection",
+            json!({"label_column":"y","columns":["x"]}),
+            json!({"kind":"feature_selection","label_column":"y","columns":["x"],"categorical_columns":[],"num_buckets":10,"relative_error":0.005}),
+        ),
+        (
+            "feature_selection_pipeline",
+            json!({"label_column":"y","columns":["x"]}),
+            json!({"kind":"feature_selection_pipeline","label_column":"y","columns":["x"],"categorical_columns":[],"num_buckets":10,"relative_error":0.005,"num_top_features":1,"output_column":"selected_features","keep_unknown":true}),
+        ),
+        (
+            "random_forest_pipeline",
+            json!({"label_column":"y"}),
+            json!({"kind":"random_forest_pipeline","label_column":"y","features_column":"features","max_depth":5,"max_bins":32,"min_instances_per_node":1,"seed":42,"num_trees":20,"bootstrap":true,"feature_subset_strategy":"auto","num_top_features":1,"task":"classification","output_column":"selected_features"}),
+        ),
         (
             "logistic_regression",
             json!({"label_column":"y"}),

@@ -10,6 +10,7 @@ import org.apache.spark.ml.regression.LinearRegression
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.functions.col
 import org.apache.spark.sql.types.{DoubleType, NumericType, StringType, StructType}
+import org.apache.spark.storage.StorageLevel
 import scala.collection.mutable
 import scala.util.control.NonFatal
 import ujson.{Arr, Null, Num, Obj, Str, Value}
@@ -19,6 +20,18 @@ object Worker {
   val ProtocolVersion = 1
   val MaxPreviewRows = 1000
   val MaxResponseBytes = 8 * 1024 * 1024
+
+  /** Runtime-only state: never serialized into project files. */
+  final class Cache {
+    val tables = mutable.Map.empty[(String, String), DataFrame]
+    val models = mutable.Map.empty[String, Transformer]
+    val tokens = mutable.Map.empty[String, String]
+    def remove(node: String): Unit = {
+      tables.keys.filter(_._1 == node).toVector.foreach { key => tables.remove(key).foreach(_.unpersist(false)) }
+      models.remove(node)
+      tokens.remove(node)
+    }
+  }
 
   def main(args: Array[String]): Unit = {
     val protocol = System.out
@@ -31,9 +44,12 @@ object Worker {
       .config("spark.sql.shuffle.partitions", "2").getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
     val source = scala.io.Source.fromInputStream(System.in, "UTF-8")
+    val cache = new Cache
     try {
       source.getLines().foreach { line =>
-        val response = try execute(spark, ujson.read(line)) catch {
+        val response = try execute(spark, ujson.read(line), cache, frame => {
+          protocol.println(ujson.write(frame)); protocol.flush()
+        }) catch {
           case NonFatal(error) => failure(Null, None, error)
         }
         protocol.println(ujson.write(response))
@@ -99,13 +115,15 @@ object Worker {
     preview(name, df, MaxPreviewRows)
   }
 
-  def execute(spark: SparkSession, request: Value): Value = {
+  def execute(spark: SparkSession, request: Value, cache: Cache = new Cache,
+      emit: Value => Unit = _ => ()): Value = {
     val id = request.obj.getOrElse("request_id", Null)
     var activeNode: Option[String] = None
     try {
       UUID.fromString(id.str)
       require(request("protocol_version").num == ProtocolVersion, "Unsupported protocol version")
-      require(request("operation").str == "run", "Unsupported operation")
+      val cached = request("operation").str == "run_nodes"
+      require(cached || request("operation").str == "run", "Unsupported operation")
       val project = request("project")
       require(project("format_version").num == 1, "Unsupported project format")
       val nodes = project("nodes").arr.map(n => n("id").str -> n("config")).toMap
@@ -113,11 +131,21 @@ object Worker {
       val edges = project("edges").arr
       val order = request("execution_order").arr.map(_.str)
       val output = request("output_node").str
-      require(order.nonEmpty && order.last == output && order.distinct.size == order.size,
+      require(order.nonEmpty && (cached || order.last == output) && order.distinct.size == order.size,
         "Invalid execution order")
-      val tables = mutable.Map.empty[(String, String), DataFrame]
-      val models = mutable.Map.empty[String, Transformer]
+      val tables = if (cached) cache.tables else mutable.Map.empty[(String, String), DataFrame]
+      val models = if (cached) cache.models else mutable.Map.empty[String, Transformer]
+      val tokens = if (cached) request("cache_tokens").obj.view.mapValues(_.str).toMap else Map.empty[String, String]
+      if (cached) cache.tokens.keys.toVector.foreach { node =>
+        if (!tokens.get(node).contains(cache.tokens(node)) || order.contains(node)) cache.remove(node)
+      }
+      def progress(node: String, phase: String): Unit = {
+        if (request.obj.get("progress").exists(_.bool)) emit(Obj(
+          "protocol_version" -> ProtocolVersion, "request_id" -> id,
+          "event" -> "node", "node" -> node, "phase" -> phase))
+      }
       var results = Vector.empty[Value]
+      var allResults = Vector.empty[Value]
 
       def upstreamEdge(node: String, port: String): Value = {
         val matches = edges.filter(e => e("to").str == node && e("to_port").str == port)
@@ -138,6 +166,8 @@ object Worker {
       spark.sparkContext.setJobGroup(id.str, "DataCraft execution", interruptOnCancel = true)
       order.foreach { node =>
         activeNode = Some(node)
+        progress(node, "running")
+        if (cached) results = Vector.empty
         val config = nodes.getOrElse(node, throw new IllegalArgumentException(s"Unknown node $node"))
         config("kind").str match {
           case "csv_source" =>
@@ -167,6 +197,11 @@ object Worker {
             fitted(node, FeaturePreparation.design(df, config("formula").str, config("features_column").str,
               config("label_column").str, config("keep_unknown").bool), df)
           case "filter" => table(node, input(node).filter(config("expression").str))
+          case "feature_selection" | "feature_selection_pipeline" | "random_forest_pipeline" =>
+            val training=input(node)
+            val selection=FeatureSelectionSupport.fit(spark,training,config)
+            selection.model.foreach(model=>fitted(node,model,training))
+            if (cached || node==output) results=Vector(preview("Feature selection",selection.report,MaxPreviewRows))
           case "select_columns" =>
             val df = input(node)
             val columns = names(config)
@@ -199,7 +234,7 @@ object Worker {
               .setRegParam(config("reg_param").num).setElasticNetParam(config("elastic_net_param").num)
             val model = estimator.fit(df)
             models(node) = model
-            if (node == output) {
+            if (cached || node == output) {
               require(model.coefficients.size <= MaxPreviewRows - 1, "Too many coefficients for bounded report")
               val estimates = Seq(Seq(Str("Intercept"), finite(model.intercept))) ++
                 model.coefficients.toArray.zipWithIndex.map { case (v, i) => Seq(Str(s"feature[$i]"), finite(v)) }
@@ -215,14 +250,14 @@ object Worker {
           case "logistic_regression" | "linear_svc" | "decision_tree_classifier" | "random_forest_classifier" =>
             models(node) = ClassificationSupport.fit(input(node), config)
           case "classification_metrics" =>
-            require(node == output, "Classification Metrics is only valid as selected output")
+            require(cached || node == output, "Classification Metrics is only valid as selected output")
             val metrics = ClassificationSupport.metrics(input(node), config("label_column").str, config("prediction_column").str)
             import scala.jdk.CollectionConverters._
             val schema = new StructType().add("metric", StringType, false).add("value", DoubleType, false)
             results = Vector(preview("Classification metrics",
               spark.createDataFrame(metrics.map { case (name, value) => Row(name, value) }.asJava, schema), MaxPreviewRows))
           case "regression_metrics" =>
-            require(node == output, "Regression Metrics is only valid as selected output")
+            require(cached || node == output, "Regression Metrics is only valid as selected output")
             val metrics = RegressionSupport.metrics(input(node), config("label_column").str, config("prediction_column").str)
             import scala.jdk.CollectionConverters._
             val schema = new StructType().add("metric", StringType, false).add("value", DoubleType, true)
@@ -239,11 +274,34 @@ object Worker {
               else "Transform requires a preprocessing model; use Predict for regression/classification")
             table(node, model.transform(input(node)))
           case "table_preview" =>
-            require(node == output, "Preview is only valid as selected output")
+            require(cached || node == output, "Preview is only valid as selected output")
             results = Vector(preview("Preview", input(node), config("rows").num.toInt))
           case other => throw new IllegalArgumentException(s"Unsupported node kind: $other")
         }
+        if (cached) {
+          val expose = node == output || !edges.exists(e => e("from").str == node && order.contains(e("to").str))
+          val outputs = tables.toVector.filter(_._1._1 == node).sortBy(_._1._2)
+          outputs.foreach { case (_, df) =>
+            df.persist(StorageLevel.MEMORY_AND_DISK)
+            df.count()
+          }
+          if (results.isEmpty && expose) {
+            results = outputs.map { case ((_, port), df) => preview(s"Preview ($port)", df, 100) }
+            if (results.isEmpty && models.contains(node)) results = Vector(
+              report(spark, "Model", Seq("node", "status"), Seq(Seq(Str(node), Str("fitted")))))
+          }
+          require(!expose || results.nonEmpty, s"Node $node produced no result")
+          cache.tokens(node) = tokens.getOrElse(node, throw new IllegalArgumentException("Missing cache token"))
+          progress(node, "completed")
+          // Return bounded terminal reports/previews; intermediate data stays in Spark.
+          if (expose) {
+            allResults ++= results.map { table => table("name") = Str(s"${table("name").str} [$node]"); table }
+            require(ujson.write(Arr.from(allResults)).getBytes(StandardCharsets.UTF_8).length < MaxResponseBytes - 1024,
+              "Preview exceeds 8 MiB response limit; run fewer terminal nodes or reduce preview width")
+          }
+        } else progress(node, "prepared")
       }
+      if (cached) results = allResults
       require(results.nonEmpty, "Selected output produced no result tables")
       val response = Obj("protocol_version" -> ProtocolVersion, "request_id" -> id,
         "ok" -> true, "tables" -> Arr.from(results))
@@ -251,7 +309,9 @@ object Worker {
         "Preview exceeds 8 MiB response limit; select fewer columns or rows")
       response
     } catch {
-      case NonFatal(error) => failure(id, activeNode, error)
+      case NonFatal(error) =>
+        if (request.obj.get("operation").exists(_.str == "run_nodes")) activeNode.foreach(cache.remove)
+        failure(id, activeNode, error)
     } finally {
       spark.sparkContext.clearJobGroup()
     }

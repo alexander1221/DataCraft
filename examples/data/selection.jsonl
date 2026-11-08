@@ -1,0 +1,9 @@
+{"id": 1, "target": 0, "signal": "a", "noise": "u"}
+{"id": 2, "target": 0, "signal": "a", "noise": "v"}
+{"id": 3, "target": 1, "signal": "b", "noise": "u"}
+{"id": 4, "target": 1, "signal": "b", "noise": "v"}
+{"id": 5, "target": 2, "signal": "c", "noise": "u"}
+{"id": 6, "target": 2, "signal": "c", "noise": "v"}
+{"id": 7, "target": 0, "signal": "a", "noise": "v"}
+{"id": 8, "target": 1, "signal": "b", "noise": "u"}
+{"id": 9, "target": 2, "signal": "d", "noise": "v"}

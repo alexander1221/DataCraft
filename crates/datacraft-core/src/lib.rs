@@ -139,6 +139,37 @@ pub enum NodeKind {
         label_column: String,
         prediction_column: String,
     },
+    FeatureSelection {
+        label_column: String,
+        columns: Vec<String>,
+        categorical_columns: Vec<String>,
+        num_buckets: u32,
+        relative_error: f64,
+    },
+    FeatureSelectionPipeline {
+        label_column: String,
+        columns: Vec<String>,
+        categorical_columns: Vec<String>,
+        num_buckets: u32,
+        relative_error: f64,
+        num_top_features: u32,
+        output_column: String,
+        keep_unknown: bool,
+    },
+    RandomForestPipeline {
+        label_column: String,
+        features_column: String,
+        output_column: String,
+        num_top_features: u32,
+        task: String,
+        max_depth: u32,
+        max_bins: u32,
+        min_instances_per_node: u32,
+        seed: u32,
+        num_trees: u32,
+        bootstrap: bool,
+        feature_subset_strategy: String,
+    },
     Predict,
     TablePreview {
         rows: u32,
@@ -177,6 +208,9 @@ impl NodeKind {
             Self::DecisionTreeClassifier { .. } => &registry::CLASSIFIER_TREE,
             Self::RandomForestClassifier { .. } => &registry::CLASSIFIER_FOREST,
             Self::ClassificationMetrics { .. } => &registry::CLASSIFIER_METRICS,
+            Self::FeatureSelection { .. } => &registry::FEATURE_SELECTION,
+            Self::FeatureSelectionPipeline { .. } => &registry::FEATURE_PIPELINE,
+            Self::RandomForestPipeline { .. } => &registry::FOREST_PIPELINE,
             Self::Predict => &registry::PREDICT,
             Self::TablePreview { .. } => &registry::PREVIEW,
         }
@@ -337,6 +371,8 @@ impl Graph {
                     if !reg_param.is_finite() || !elastic_net_param.is_finite() || !threshold.is_finite())
                 || matches!(&node.config,NodeKind::LinearSvc {reg_param,threshold,..}
                     if !reg_param.is_finite() || !threshold.is_finite())
+                || matches!(&node.config,NodeKind::FeatureSelection {relative_error,..} | NodeKind::FeatureSelectionPipeline {relative_error,..}
+                    if !relative_error.is_finite())
             {
                 return Err(GraphError::Parameters {
                     node: node.id,
@@ -451,8 +487,16 @@ impl Graph {
 
     /// Only the requested output's ancestors, in validated execution order.
     pub fn execution_order(&self, output: Uuid) -> Result<Vec<Uuid>, GraphError> {
-        let order = self.validate_structure()?;
         self.output(Some(output))?;
+        self.dependency_order(output)
+    }
+
+    /// Validated ancestors of any node, including non-report intermediate nodes.
+    pub fn dependency_order(&self, output: Uuid) -> Result<Vec<Uuid>, GraphError> {
+        let order = self.validate_structure()?;
+        if !order.contains(&output) {
+            return Err(GraphError::MissingNode(output));
+        }
         let mut required = BTreeSet::from([output]);
         let mut pending = vec![output];
         while let Some(id) = pending.pop() {

@@ -13,7 +13,7 @@ fn command_discovery_uses_engine_registry_without_java() {
         .unwrap();
     assert!(output.status.success());
     let commands: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(commands.as_array().unwrap().len(), 18);
+    assert_eq!(commands.as_array().unwrap().len(), 20);
     let add = commands
         .as_array()
         .unwrap()
@@ -60,6 +60,8 @@ fn node_discovery_is_machine_readable_and_does_not_require_java() {
             "csv_source",
             "decision_tree_classifier",
             "decision_tree_regressor",
+            "feature_selection",
+            "feature_selection_pipeline",
             "filter",
             "generalized_linear_regression",
             "index_categoricals",
@@ -72,6 +74,7 @@ fn node_discovery_is_machine_readable_and_does_not_require_java() {
             "parquet_source",
             "predict",
             "random_forest_classifier",
+            "random_forest_pipeline",
             "random_forest_regressor",
             "reference_code_categoricals",
             "regression_metrics",

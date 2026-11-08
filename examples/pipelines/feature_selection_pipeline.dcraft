@@ -1,0 +1,123 @@
+{
+  "format_version": 1,
+  "name": "DataCraft feature selection pipeline",
+  "nodes": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "position": [
+        40.0,
+        147.0
+      ],
+      "config": {
+        "kind": "json_source",
+        "path": "../data/selection.jsonl"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "position": [
+        380.0,
+        51.0
+      ],
+      "config": {
+        "kind": "filter",
+        "expression": "id <= 6"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "position": [
+        380.0,
+        243.0
+      ],
+      "config": {
+        "kind": "filter",
+        "expression": "id >= 7"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000004",
+      "position": [
+        720.0,
+        40.0
+      ],
+      "config": {
+        "kind": "feature_selection_pipeline",
+        "label_column": "target",
+        "columns": [
+          "signal",
+          "noise"
+        ],
+        "categorical_columns": [
+          "signal",
+          "noise"
+        ],
+        "num_buckets": 3,
+        "relative_error": 0.0,
+        "num_top_features": 1,
+        "output_column": "selected_features",
+        "keep_unknown": true
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000005",
+      "position": [
+        1060.0,
+        136.0
+      ],
+      "config": {
+        "kind": "transform"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000006",
+      "position": [
+        1400.0,
+        147.0
+      ],
+      "config": {
+        "kind": "table_preview",
+        "rows": 20
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "00000000-0000-0000-0000-000000000001",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000002",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000001",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000003",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000002",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000004",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000003",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000005",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000004",
+      "from_port": "model",
+      "to": "00000000-0000-0000-0000-000000000005",
+      "to_port": "model"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000005",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000006",
+      "to_port": "table"
+    }
+  ],
+  "output_node": "00000000-0000-0000-0000-000000000004"
+}

@@ -42,6 +42,10 @@ pub enum Command {
     SaveAs { path: PathBuf },
     #[serde(rename = "execution.run")]
     Run { output: Option<Uuid> },
+    #[serde(rename = "execution.node.run")]
+    RunNode { node_id: Uuid },
+    #[serde(rename = "execution.downstream.run")]
+    RunDownstream { node_id: Uuid },
     #[serde(rename = "execution.cancel")]
     Cancel { job_id: Uuid },
     #[serde(rename = "execution.status")]
@@ -285,6 +289,20 @@ pub const COMMANDS: &[CommandSpec] = &[
             },
         ],
     },
+    CommandSpec {
+        id: "execution.node.run",
+        label: "Run node",
+        mutates_project: false,
+        undoable: false,
+        parameters: &[NODE_ID],
+    },
+    CommandSpec {
+        id: "execution.downstream.run",
+        label: "Run downstream",
+        mutates_project: false,
+        undoable: false,
+        parameters: &[NODE_ID],
+    },
 ];
 
 impl Command {
@@ -309,6 +327,8 @@ impl Command {
             Self::Cancel { .. } => 15,
             Self::JobStatus { .. } => 16,
             Self::New { .. } => 17,
+            Self::RunNode { .. } => 18,
+            Self::RunDownstream { .. } => 19,
         }]
     }
 }

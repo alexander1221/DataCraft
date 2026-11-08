@@ -1,6 +1,117 @@
 # Проверки первой реализации
 
+## Контуры статусов без цветной заливки — 2026-11-09
+
+PASS: 30 desktop unit tests, fmt check, Clippy desktop all-targets/all-features
+с `-D warnings`. Проверка canvas подтверждает обычную тёмную заливку,
+зелёный/красный контур и сохранение spinner. Spark-интеграция для этой правки
+оформления NOT_RUN; её assertion обновлён на контур и скомпилирован.
+
+## Поузловое выполнение и оформление canvas — 2026-11-09
+
+verified 2026-11-09 via Windows/MSVC, Rust 1.99.1, Java 21.0.13,
+Scala 2.13.16, Spark 4.0.1. Контракт: [NODE_EXECUTION.md](NODE_EXECUTION.md).
+
+| Проверка | Фактический результат |
+|---|---|
+| cargo xtask --offline ci | PASS: fmt/check/test/Clippy, layers, commands, nodes |
+| cargo test --workspace --locked --offline | PASS: 120 тестов; один ignored subprocess fixture вызывается родительским тестом |
+| Clippy all-targets/all-features, -D warnings | PASS |
+| Реестры | PASS: 20 команд, 27 типов нод; новые execution.node.run / execution.downstream.run |
+| Scala compiler + JUnitCore | PASS: 44 настоящих Spark/MUnit-теста, включая четыре NodeExecutionSuite |
+| cargo xtask fixtures | PASS: 16 эталонных pipeline, схемы и значения совпадают с независимыми oracles |
+| Opt-in GUI run_button tests | PASS: все 6 сценариев с реальным Spark; новый тест нажимает ▶ / ⏩ через egui input, проверяет строки и красную подсветку |
+| node_lifecycle example | PASS: строгие входы, сохранённый worker, quantity 4/5/6, инвалидация, ошибка, undo, cancel и восстановление |
+| job_lifecycle example | PASS: прежний режим, отмена JVM и обнаружение устаревшего результата |
+| Native sample --smoke-frames 4 | PASS: проект загружен, четыре кадра, exit 0; не заменяет ручную визуальную приёмку |
+| validate_generated.py . | PASS: errors=0 |
+| sbt test writeClasspath | FAIL до компиляции: sandbox не разрешает sbt.boot.lock; проверка compiler/JUnit выполнена отдельно |
+
+Проверены настоящие materialized таблицы: временный CSV удалён после Source,
+следующий Filter успешно вернул 4/5/6 из кэша. Проверены повторное использование
+fitted Model, ветвящийся preprocessing/classification DAG и оба выхода Split.
+Rust state-machine tests отдельно проверяют независимую ветку, invalidation
+по config/рёбрам/родителям, игнорирование поздних событий старого snapshot,
+различие lazy success и cached inputs, порядок/идентичность protocol frames.
+Canvas tests проверяют footer hit targets без Move/Select, disabled controls,
+цветовые состояния и геометрию spinner.
+
+NOT_RUN для этого пакета: ручная визуальная приёмка нового оформления,
+новый удалённый GitHub Actions run, Linux/macOS и независимый reviewer.
+Новых зависимостей нет. Сохранение кэша между открытиями и надёжный checkpoint
+не реализованы; MEMORY_AND_DISK допускает внутренний Spark recomputation.
+ML tolerance 1e-6 остаётся provisional acceptance, не оценкой ошибки solver.
+
+Ниже сохранена история предыдущих проверок; старые NOT_RUN не отменяют
+результаты актуального пакета выше.
+
 Дата: 2026-11-08. Среда: Windows, PowerShell, Python 3.14.3.
+
+## Отбор признаков: 27 типов нод
+
+verified 2026-11-08 via Windows/MSVC, Rust 1.99.1, JDK 21.0.13,
+Scala 2.13.16, Spark 4.0.1, MUnit 1.0.4/JUnit 4.13.2.
+Новые kind: feature_selection, feature_selection_pipeline, random_forest_pipeline.
+Контракт: [FEATURE_SELECTION.md](FEATURE_SELECTION.md).
+
+| Проверка | Фактический результат |
+|---|---|
+| cargo xtask --offline ci | PASS: fmt/check/tests/Clippy, layers, commands, nodes |
+| Workspace tests | PASS: 111 тестов, один subprocess fixture ignored, вызывается родительским тестом |
+| Clippy --workspace --all-targets --all-features --locked --offline -- -D warnings | PASS |
+| Scala compiler + JUnitCore | PASS: 40 реальных Spark/MUnit-тестов, включая 32 предыдущих |
+| cargo xtask fixtures | PASS: 16 проектов, схемы/значения совпадают с независимыми oracles |
+| CLI feature_selection.dcraft | PASS: signal χ²≈12, df=4, p≈0.017351265236664526; noise χ²=0, df=2, p=1 |
+| CLI feature_selection_pipeline.dcraft --output ...000006 | PASS: train-only indices 0/1/3 для test a/b/unseen d |
+| CLI random_forest_pipeline.dcraft --output ...000011 | PASS: downstream classifier accuracy и weighted метрики = 1 |
+| Opt-in selection_run_button | PASS: два JVM jobs через GUI adapter, importance 0/1, test selected vectors 1/7, metadata dimension=1 |
+| Native random_forest_pipeline.dcraft --smoke-frames 4 | PASS: проект загружен, четыре кадра, exit 0 |
+| sbt test writeClasspath | FAIL до компиляции: sandbox запрещает доступ к sbt.boot.lock |
+
+Проверены χ² по аналитической contingency table, unlabelled Transform, unseen
+category без переобучения, сохранение исходных continuous values вместо bins,
+имена/порядок выбранных features, copy модели, constant df=0 с null p-value,
+детерминированные ties. RF classification/regression importance проверена на
+signal/constant noise; sparse vectors, неправильная test dimension и запрет
+Predict для selection Model проверены отдельно. Полный RF selection→classifier
+исполнен реально. Изменение только test target сохраняет selection и превращает
+perfect classification в четыре нулевые метрики — отдельный leakage-тест.
+
+Невалидные lists/subsets/лимиты/NaN defaults отклоняются в Rust без JVM.
+Backend проверяет nulls, incompatible types, неизвестные категории в strict mode,
+пустой train, высокую cardinality, output collisions и недостаточное количество
+неconstant features. Временные имена резервируются с учётом пользовательского
+output name; отдельный тест с __datacraft_selection_3 подтверждает отсутствие
+коллизии и потери output. Новые проекты включены в round-trip/path и inspector tests.
+
+Первый Scala прогон — FAIL: Spark degreesOfFreedom вернул mutable ArraySeq,
+а код ожидал immutable Seq; VectorSizeHint требовал literal name без backticks.
+Оба API-различия исправлены. Следующий прогон выявил потерю feature names:
+VectorAssembler.transformSchema не заполняет attrs. Metadata теперь восстанавливается
+из исходных имён и fitted vocabulary с сохранением Nominal/Numeric типов.
+После исправлений и защиты temporary names повторён полный suite: 40 PASS.
+
+Численный отчёт для двух categorical predictors: L∞ absolute error statistic
+=1.7763568394002505e-15 относительно [12,0], p-values =1.734723475976807e-17
+относительно [7*exp(-6),1]. Отношения к provisional acceptance 1e-12:
+0.0017763568394002505 и 0.00001734723475976807. Это наблюдения на tiny oracle,
+не доказательство общего error bound или пригодности asymptotic p-values для
+малых expected counts. Importance 0/1, selected flags, indices и выбранные
+test values сравниваются точно. Старый solver threshold 1e-6 не менялся.
+
+Fallback использует установленные Scala compiler/MUnit jars и JVM flags из
+build.sbt; 13 проверенных production .class скопированы только в workspace target.
+Отдельные CLI-прогоны используют обычный target/classpath.txt. Это не успешный
+sbt run. Новых зависимостей нет; на свежем checkout используйте sbt test writeClasspath.
+
+Логи (ignored): `.tools/selection-{ci,scala,fixtures,cli-report,cli-transform,
+cli-metrics,ui-spark,clippy-features,native,sbt,arrange}.log`. После уточнения
+temporary-name reservation повторены Scala suite и затронутый CLI Transform.
+NOT_RUN: новый Actions run, новые ноды на Linux/macOS, независимое review,
+ручная приёмка новых нод в настоящем окне. Native startup и GUI adapter проверены
+отдельно. Job lifecycle в этом пакете отдельно не повторялся.
+Ограничения: categorical target для χ², unadjusted/asymptotic p-values,
+provisional 1e-12, bounded metadata вместо общей RAM-гарантии, runtime-only models.
 
 ## Читаемость графа и актуальность результатов
 

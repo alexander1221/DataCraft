@@ -63,17 +63,24 @@ Float обязан быть конечным; integer ограничиваетс
 | decision_tree_classifier | Table → Model | как Tree Regressor; impurity=gini (gini/entropy) |
 | random_forest_classifier | Table → Model | как Forest Regressor; impurity=gini |
 | classification_metrics | Table → — | prediction_column=prediction; label_column обязателен |
+| feature_selection | Table → — | categorical_columns=[], num_buckets=10, relative_error=0.005; label_column/columns обязательны |
+| feature_selection_pipeline | Table → Table + Model | как Feature Selection; num_top_features=1, output_column=selected_features, keep_unknown=true |
+| random_forest_pipeline | Table → Table + Model | как Forest Regressor; task=classification, num_top_features=1, output_column=selected_features |
 | predict | Table + Model → Table | — |
 | table_preview | Table → — | rows=100 |
 
 Limit rows: 1..2147483647; preview rows: 1..1000; max_iter:
 1..2147483647; reg_param >= 0; elastic_net_param: 0..1.
 Label и features columns различны; output_column не входит в columns.
-Выбираемые выходы: table_preview, linear_regression, regression_metrics и classification_metrics.
-Новые estimator-ноды передают Model в Predict, прямой model report для них
+Выбираемые выходы: table_preview, linear_regression, regression_metrics,
+classification_metrics и все три ноды отбора (отчёт).
+Новые regression/classification estimator-ноды передают Model в Predict, прямой model report для них
 пока не предусмотрен. Метрики и допустимые GLM family/link: [REGRESSION.md](REGRESSION.md).
 Classifier domains, probability/margin thresholds и weighted метрики:
 [CLASSIFICATION.md](CLASSIFICATION.md).
+Отбор и статистические ограничения: [FEATURE_SELECTION.md](FEATURE_SELECTION.md).
+StringList defaults поддерживают [], ItemsIn задаёт подмножество другого списка,
+MaxItems ограничивает размер. Для selection columns лимит 1000 проверяется до JVM.
 Defaults применяются при явном создании, не изменяют загрузку старых .dcraft.
 
 ## §5. Реализация
@@ -114,6 +121,6 @@ config.validate_parameters()?;
 ## §8′. Устойчивость
 
 Ошибки пользователя возвращаются как Result, без panic. Реестр конечный,
-24 ноды; поиск линейный. Parameter validation не читает datasets, не запускает
+27 нод; поиск линейный. Parameter validation не читает datasets, не запускает
 JVM и не оценивает SQL. Проверка непустого local path не гарантирует существование
 файла. Реестр не доказывает универсальную bounded-memory работу Spark.

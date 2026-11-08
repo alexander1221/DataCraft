@@ -32,6 +32,11 @@ Rust core не зависит от Spark или egui.
 
 ## Постоянная модель
 
+Отбор признаков возвращает fitted preprocessing Model для Transform:
+statistical top-k хранит train-only dictionary/indices, RF selection — slicer.
+RF внутри selection-ноды не подменяет downstream Predictor. Все три selection
+ноды имеют выбираемый report output. Контракт: [FEATURE_SELECTION.md](FEATURE_SELECTION.md).
+
 Подготовка признаков: Source → Split.train → fitted preprocessing;
 Split.test + preprocessing.model → Transform → Preview/Predict.
 Worker хранит таблицы по `(node UUID, port ID)`: train и test не заменяют друг
@@ -112,10 +117,13 @@ JSON-объекты в `rows`. Неопределённые числовые м�
 
 ## Границы первой версии
 
-Нет кэша данных между запросами, сохранения моделей или процентного прогресса Spark.
+Есть отдельный session-local кэш поузлового режима; нет сохранения моделей
+между открытиями проекта и процентного прогресса Spark.
 GUI event loop опрашивает Session и не вызывает блокирующий Worker::run.
-Каждый job создаёт свой JVM; Scala DataFrame/ML objects остаются
-локальными одному запросу. Результаты помечаются project_revision; это проверка
+Обычный Run создаёт свой JVM и ленивый план. RunNode/RunDownstream используют
+постоянный worker и materialized DataFrame/ML objects. Кэш сбрасывается по
+зависимостям и не входит в Project/undo. Контракт: [NODE_EXECUTION.md](NODE_EXECUTION.md).
+Результаты помечаются project_revision; это проверка
 снимка графа, а не обнаружение внешних изменений dataset или runtime settings.
 Низкоуровневый Worker::run блокирует runner thread; Session::dispatch(Run)
 возвращает Job ID. Supervisor отдельно обрабатывает cancel/deadline, не захватывая

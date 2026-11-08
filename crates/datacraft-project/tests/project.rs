@@ -18,6 +18,9 @@ fn preprocessing_examples_round_trip_and_resolve_json_paths() {
         "linear_svc",
         "decision_tree_classifier",
         "random_forest_classifier",
+        "feature_selection",
+        "feature_selection_pipeline",
+        "random_forest_pipeline",
     ] {
         let path = root.join(format!("{name}.dcraft"));
         let mut project = Project::load(&path).unwrap();

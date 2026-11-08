@@ -1,5 +1,6 @@
 //! Transactional project edits and lifecycle. Full contract: docs/COMMANDS.md.
 use crate::jobs::{ExecutionEvent, JobError, JobInfo, JobManager, JobOptions};
+use crate::node_runtime::{NodeRuntime, NodeStatus};
 use crate::{Command, EngineError, ExecutionResult};
 use datacraft_core::{GraphError, NodeKind};
 use datacraft_project::{Project, ProjectError};
@@ -108,6 +109,8 @@ pub struct Session {
     pub(crate) jobs: JobManager,
     job_options: JobOptions,
     last_execution: Option<Arc<ExecutionRecord>>,
+    nodes: NodeRuntime,
+    settled_job: Option<Uuid>,
 }
 
 impl Default for Session {
@@ -133,6 +136,8 @@ impl Session {
             jobs: JobManager::default(),
             job_options: JobOptions::default(),
             last_execution: None,
+            nodes: NodeRuntime::default(),
+            settled_job: None,
         }
     }
     pub fn from_project(mut project: Project, history_limit: usize) -> Result<Self, SessionError> {
@@ -172,7 +177,12 @@ impl Session {
             .is_some_and(|_| self.result_computation_revision == Some(self.computation_revision))
     }
     pub fn configure_worker(&mut self, config: WorkerConfig) {
+        self.nodes = NodeRuntime::default();
         self.worker_config = Some(config);
+    }
+
+    pub fn node_statuses(&self) -> std::collections::BTreeMap<Uuid, NodeStatus> {
+        self.nodes.statuses()
     }
 
     pub fn configure_job_options(&mut self, options: JobOptions) {
@@ -193,6 +203,18 @@ impl Session {
     }
     fn refresh_execution(&mut self) {
         if let Some(info) = self.jobs.current_info() {
+            if info.status.is_terminal() && self.settled_job != Some(info.id) {
+                let cancelled = matches!(
+                    info.status,
+                    crate::jobs::JobStatus::Cancelled | crate::jobs::JobStatus::TimedOut
+                );
+                if cancelled {
+                    self.nodes.lost_worker();
+                }
+                self.nodes
+                    .settle(info.error.as_ref().and_then(|e| e.node), cancelled);
+                self.settled_job = Some(info.id);
+            }
             if let Ok(Some(record)) = self.jobs.result(info.id) {
                 if !self
                     .last_execution
@@ -238,8 +260,16 @@ impl Session {
             Command::Undo if !self.can_undo() => Some("undo history is empty"),
             Command::Redo if !self.can_redo() => Some("redo history is empty"),
             Command::Save if self.path.is_none() => Some("no save path; use save_as"),
-            Command::Run { .. } if self.jobs.is_busy() => Some("another execution job is active"),
-            Command::Run { .. } if self.worker_config.is_none() => Some("worker is not configured"),
+            Command::Run { .. } | Command::RunNode { .. } | Command::RunDownstream { .. }
+                if self.jobs.is_busy() =>
+            {
+                Some("another execution job is active")
+            }
+            Command::Run { .. } | Command::RunNode { .. } | Command::RunDownstream { .. }
+                if self.worker_config.is_none() =>
+            {
+                Some("worker is not configured")
+            }
             _ => None,
         };
         CommandAvailability {
@@ -333,6 +363,7 @@ impl Session {
                     };
                     project.validate_structure()?;
                     let revision = self.next_revision()?;
+                    self.nodes = NodeRuntime::default();
                     self.project = Some(project);
                     self.saved = None;
                     self.path = None;
@@ -350,6 +381,7 @@ impl Session {
                 Command::Open { path, .. } => {
                     let path = std::fs::canonicalize(path)?;
                     let mut project = Project::load(&path)?;
+                    self.nodes = NodeRuntime::default();
                     canonicalize(&mut project);
                     let revision = self.next_revision()?;
                     self.saved = Some(project.clone());
@@ -395,9 +427,57 @@ impl Session {
                         command: id,
                         reason: "worker is not configured",
                     })?;
-                    let info = self.jobs.start(
+                    self.nodes.sync(&runtime)?;
+                    let info = self.jobs.start_observed(
                         runtime,
                         output,
+                        self.revision,
+                        config,
+                        self.job_options,
+                        Some(self.nodes.clone()),
+                    )?;
+                    self.pending_execution_revision =
+                        Some((self.revision, self.computation_revision));
+                    CommandPayload::JobStarted {
+                        job_id: info.id,
+                        project_revision: info.project_revision,
+                    }
+                }
+                Command::RunNode { node_id } | Command::RunDownstream { node_id } => {
+                    let downstream = matches!(command, Command::RunDownstream { .. });
+                    let project = self.current()?;
+                    let runtime = if let Some(path) = &self.path {
+                        resolved_snapshot(project, path)
+                    } else {
+                        let required = project.graph.dependency_order(node_id)?;
+                        for node in project
+                            .graph
+                            .nodes
+                            .iter()
+                            .filter(|n| required.contains(&n.id))
+                        {
+                            let source = match &node.config {
+                                NodeKind::CsvSource { path, .. }
+                                | NodeKind::ParquetSource { path }
+                                | NodeKind::JsonSource { path } => Some(path),
+                                _ => None,
+                            };
+                            if source.is_some_and(|p| !p.is_empty() && !Path::new(p).is_absolute())
+                            {
+                                return Err(SessionError::RelativeSourceWithoutProject);
+                            }
+                        }
+                        project.clone()
+                    };
+                    let order = self.nodes.prepare(&runtime, node_id, downstream)?;
+                    let config = self.worker_config.clone().ok_or(SessionError::Disabled {
+                        command: id,
+                        reason: "worker is not configured",
+                    })?;
+                    let info = self.jobs.start_nodes(
+                        runtime,
+                        self.nodes.clone(),
+                        order,
                         self.revision,
                         config,
                         self.job_options,
@@ -424,6 +504,13 @@ impl Session {
             events.push(SessionEvent::ProjectChanged {
                 revision: self.revision,
             });
+        }
+        if let Some(project) = &self.project {
+            let runtime = self
+                .path
+                .as_ref()
+                .map(|path| resolved_snapshot(project, path));
+            self.nodes.sync(runtime.as_ref().unwrap_or(project))?;
         }
         Ok(CommandResult {
             command_id: id,
@@ -471,6 +558,29 @@ impl Session {
         events.push(SessionEvent::Saved { path: path.clone() });
         Ok(CommandPayload::Saved { path })
     }
+}
+
+/// Session paths are canonical at open/save time. Synchronizing cache identity must
+/// not access the filesystem after a successful transactional project edit.
+fn resolved_snapshot(project: &Project, path: &Path) -> Project {
+    let mut runtime = project.clone();
+    if let Some(base) = path.parent() {
+        for node in &mut runtime.graph.nodes {
+            let source = match &mut node.config {
+                NodeKind::CsvSource { path, .. }
+                | NodeKind::ParquetSource { path }
+                | NodeKind::JsonSource { path } => path,
+                _ => continue,
+            };
+            if !source.trim().is_empty()
+                && !source.contains("://")
+                && !Path::new(source).is_absolute()
+            {
+                *source = base.join(&*source).to_string_lossy().into_owned();
+            }
+        }
+    }
+    runtime
 }
 
 fn same_computation(a: &Project, b: &Project) -> bool {

@@ -1,5 +1,6 @@
 //! Single-active-job execution. Contracts and race semantics: docs/EXECUTION.md.
 use crate::{
+    node_runtime::{NodeRuntime, NodeStatus},
     session::{ExecutionRecord, WorkerConfig},
     EngineError, Worker, WorkerCancellation,
 };
@@ -107,14 +108,41 @@ pub enum ExecutionStage {
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ExecutionEvent {
-    Queued { job_id: Uuid, project_revision: u64 },
-    Started { job_id: Uuid, project_revision: u64 },
-    Stage { job_id: Uuid, stage: ExecutionStage },
-    CancellationRequested { job_id: Uuid, reason: StopReason },
-    Completed { job_id: Uuid, project_revision: u64 },
-    Failed { job_id: Uuid, error: JobFailure },
-    Cancelled { job_id: Uuid },
-    TimedOut { job_id: Uuid },
+    Node {
+        job_id: Uuid,
+        node: Uuid,
+        status: NodeStatus,
+    },
+    Queued {
+        job_id: Uuid,
+        project_revision: u64,
+    },
+    Started {
+        job_id: Uuid,
+        project_revision: u64,
+    },
+    Stage {
+        job_id: Uuid,
+        stage: ExecutionStage,
+    },
+    CancellationRequested {
+        job_id: Uuid,
+        reason: StopReason,
+    },
+    Completed {
+        job_id: Uuid,
+        project_revision: u64,
+    },
+    Failed {
+        job_id: Uuid,
+        error: JobFailure,
+    },
+    Cancelled {
+        job_id: Uuid,
+    },
+    TimedOut {
+        job_id: Uuid,
+    },
 }
 
 #[derive(Debug, Error)]
@@ -203,6 +231,16 @@ impl Control {
         let mut shared = lock(&self.observable.state);
         let id = shared.info.id;
         shared.push(ExecutionEvent::Stage { job_id: id, stage });
+        self.observable.changed.notify_all();
+    }
+    fn node(&self, node: Uuid, status: NodeStatus) {
+        let mut shared = lock(&self.observable.state);
+        let job_id = shared.info.id;
+        shared.push(ExecutionEvent::Node {
+            job_id,
+            node,
+            status,
+        });
         self.observable.changed.notify_all();
     }
     fn finish(&self, outcome: Result<ExecutionRecord, JobFailure>) {
@@ -345,7 +383,27 @@ impl JobManager {
         config: WorkerConfig,
         options: JobOptions,
     ) -> Result<JobInfo, JobError> {
+        self.start_observed(project, output, revision, config, options, None)
+    }
+
+    pub(crate) fn start_observed(
+        &mut self,
+        project: Project,
+        output: Uuid,
+        revision: u64,
+        config: WorkerConfig,
+        options: JobOptions,
+        runtime: Option<NodeRuntime>,
+    ) -> Result<JobInfo, JobError> {
+        let tokens = runtime
+            .as_ref()
+            .map(NodeRuntime::tokens)
+            .unwrap_or_default();
         self.spawn(revision, options, move |control| {
+            let order = project.graph.execution_order(output).map_err(EngineError::from)?;
+            if let Some(runtime) = &runtime {
+                for node in &order { runtime.display(&tokens, *node, NodeStatus::Queued, false); }
+            }
             if control.stop_reason().is_some() {
                 return Err(EngineError::Protocol("cancelled before startup".into()).into());
             }
@@ -354,7 +412,10 @@ impl JobManager {
             control.install_worker(worker.cancellation_handle());
             let outcome = if control.stop_reason().is_none() {
                 control.stage(ExecutionStage::Executing);
-                worker.run(&project, Some(output))
+                worker.run_with_progress(&project, Some(output), |node, status| {
+                    if let Some(runtime) = &runtime { runtime.display(&tokens, node, status, false); }
+                    control.node(node, status);
+                })
             } else {
                 Err(EngineError::Protocol("cancelled before execution".into()))
             };
@@ -362,10 +423,61 @@ impl JobManager {
             let cleanup = worker.cancel();
             drop(worker);
             cleanup?;
+            if let Some(runtime) = &runtime {
+                for node in &order {
+                    let status = if control.stop_reason().is_some() { NodeStatus::Cancelled }
+                        else if outcome.is_ok() { NodeStatus::Succeeded }
+                        else if matches!(&outcome, Err(EngineError::Execution {node: Some(id), ..}) if id == node) { NodeStatus::Failed }
+                        else { NodeStatus::Idle };
+                    runtime.display(&tokens, *node, status, false);
+                }
+            }
             Ok(ExecutionRecord {
                 project_revision: revision,
                 result: outcome?,
             })
+        })
+    }
+
+    pub(crate) fn start_nodes(
+        &mut self,
+        project: Project,
+        runtime: NodeRuntime,
+        order: Vec<Uuid>,
+        revision: u64,
+        config: WorkerConfig,
+        options: JobOptions,
+    ) -> Result<JobInfo, JobError> {
+        let tokens = runtime.tokens();
+        self.spawn(revision, options, move |control| {
+            for node in &order { runtime.update(&tokens, *node, NodeStatus::Queued); }
+            let mut slot = crate::node_runtime::lock(&runtime.worker.0);
+            let outcome = (|| -> Result<_, EngineError> {
+                if control.stop_reason().is_some() { return Err(EngineError::Protocol("cancelled before startup".into())); }
+                control.stage(ExecutionStage::StartingWorker);
+                if slot.is_none() { *slot = Some(Worker::start(&config.java, &config.classpath_file)?); }
+                let worker = slot.as_mut().ok_or_else(|| EngineError::Protocol("missing persistent worker".into()))?;
+                control.install_worker(worker.cancellation_handle());
+                control.stage(ExecutionStage::Executing);
+                worker.run_nodes(&project, &order, &tokens, |node, status| {
+                    runtime.update(&tokens, node, status);
+                    control.node(node, status);
+                })
+            })();
+            let query_error = matches!(&outcome, Err(EngineError::Execution { .. }));
+            if control.stop_reason().is_some() || (outcome.is_err() && !query_error) {
+                control.stage(ExecutionStage::StoppingWorker);
+                if let Some(mut worker) = slot.take() { let _ = worker.cancel(); }
+                runtime.lost_worker();
+            } else if query_error {
+                for node in &order {
+                    let status = if matches!(&outcome, Err(EngineError::Execution {node: Some(id), ..}) if id == node) { NodeStatus::Failed }
+                        else if runtime.statuses().get(node) == Some(&NodeStatus::Completed) { NodeStatus::Completed }
+                        else { NodeStatus::Idle };
+                    runtime.update(&tokens, *node, status);
+                }
+            }
+            Ok(ExecutionRecord { project_revision: revision, result: outcome? })
         })
     }
 

@@ -46,6 +46,7 @@ pub enum DefaultValue {
     Boolean(bool),
     UnsignedInteger(u32),
     Float(f64),
+    StringList(&'static [&'static str]),
 }
 
 impl DefaultValue {
@@ -55,6 +56,11 @@ impl DefaultValue {
             Self::Boolean(v) => v.into(),
             Self::UnsignedInteger(v) => v.into(),
             Self::Float(v) => v.into(),
+            Self::StringList(v) => v
+                .iter()
+                .map(|s| Value::String((*s).into()))
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 }
@@ -65,6 +71,8 @@ pub enum ParameterRule {
     NonEmpty,
     LocalPath,
     UniqueItems,
+    MaxItems { max: u32 },
+    ItemsIn { parameter: &'static str },
     IntegerRange { min: u32, max: u32 },
     NumberRange { min: f64, max: Option<f64> },
     OpenNumberRange { min: f64, max: f64 },
@@ -174,6 +182,16 @@ impl NodeSpec {
                 ParameterRule::IntegerRange { min, max } => value
                     .as_u64()
                     .is_some_and(|v| (u64::from(*min)..=u64::from(*max)).contains(&v)),
+                ParameterRule::MaxItems { max } => {
+                    value.as_array().is_some_and(|v| v.len() <= *max as usize)
+                }
+                ParameterRule::ItemsIn { parameter } => value.as_array().is_some_and(|xs| {
+                    xs.iter().all(|v| {
+                        all.get(*parameter)
+                            .and_then(Value::as_array)
+                            .is_some_and(|ys| ys.contains(v))
+                    })
+                }),
                 ParameterRule::NumberRange { min, max } => value
                     .as_f64()
                     .is_some_and(|v| v >= *min && max.is_none_or(|m| v <= m)),
@@ -807,6 +825,148 @@ pub(crate) const CLASSIFIER_METRICS: NodeSpec = NodeSpec {
     label: "Classification Metrics",
     ..METRICS
 };
+pub(crate) const FEATURE_SELECTION: NodeSpec = NodeSpec {
+    id: "feature_selection",
+    label: "Feature Selection",
+    category: NodeCategory::MachineLearning,
+    inputs: TABLE,
+    outputs: &[],
+    selectable_output: true,
+    parameters: &[
+        ParameterSpec {
+            name: "label_column",
+            label: "Categorical target",
+            parameter_type: ParameterType::String,
+            default: None,
+            rules: &[
+                ParameterRule::NonEmpty,
+                ParameterRule::NotInList {
+                    parameter: "columns",
+                },
+            ],
+        },
+        ParameterSpec {
+            rules: &[
+                ParameterRule::NonEmpty,
+                ParameterRule::UniqueItems,
+                ParameterRule::MaxItems { max: 1000 },
+            ],
+            ..COLUMN_SELECTION
+        },
+        ParameterSpec {
+            name: "categorical_columns",
+            label: "Categorical candidates (subset)",
+            parameter_type: ParameterType::StringList,
+            default: Some(DefaultValue::StringList(&[])),
+            rules: &[
+                ParameterRule::UniqueItems,
+                ParameterRule::ItemsIn {
+                    parameter: "columns",
+                },
+            ],
+        },
+        ParameterSpec {
+            name: "num_buckets",
+            label: "Continuous bins",
+            parameter_type: ParameterType::UnsignedInteger,
+            default: Some(DefaultValue::UnsignedInteger(10)),
+            rules: &[ParameterRule::IntegerRange { min: 2, max: 1000 }],
+        },
+        ParameterSpec {
+            name: "relative_error",
+            label: "Quantile relative rank error",
+            parameter_type: ParameterType::Float,
+            default: Some(DefaultValue::Float(0.005)),
+            rules: &[ParameterRule::NumberRange {
+                min: 0.0,
+                max: Some(1.0),
+            }],
+        },
+    ],
+};
+const TOP_FEATURES: ParameterSpec = ParameterSpec {
+    name: "num_top_features",
+    label: "Selected feature count",
+    parameter_type: ParameterType::UnsignedInteger,
+    default: Some(DefaultValue::UnsignedInteger(1)),
+    rules: &[ParameterRule::IntegerRange { min: 1, max: 1000 }],
+};
+pub(crate) const FEATURE_PIPELINE: NodeSpec = NodeSpec {
+    id: "feature_selection_pipeline",
+    label: "Feature Selection Pipeline",
+    outputs: FIT_OUTPUTS,
+    parameters: &[
+        FEATURE_SELECTION.parameters[0],
+        FEATURE_SELECTION.parameters[1],
+        FEATURE_SELECTION.parameters[2],
+        FEATURE_SELECTION.parameters[3],
+        FEATURE_SELECTION.parameters[4],
+        TOP_FEATURES,
+        ParameterSpec {
+            name: "output_column",
+            label: "Selected vector column",
+            parameter_type: ParameterType::String,
+            default: Some(DefaultValue::String("selected_features")),
+            rules: &[
+                ParameterRule::NonEmpty,
+                ParameterRule::NotInList {
+                    parameter: "columns",
+                },
+                ParameterRule::DifferentFrom {
+                    parameter: "label_column",
+                },
+            ],
+        },
+        ParameterSpec {
+            default: Some(DefaultValue::Boolean(true)),
+            ..KEEP_UNKNOWN
+        },
+    ],
+    ..FEATURE_SELECTION
+};
+pub(crate) const FOREST_PIPELINE: NodeSpec = NodeSpec {
+    id: "random_forest_pipeline",
+    label: "Random Forest Pipeline",
+    outputs: FIT_OUTPUTS,
+    selectable_output: true,
+    parameters: &[
+        FOREST.parameters[0],
+        FOREST.parameters[1],
+        FOREST.parameters[2],
+        FOREST.parameters[3],
+        FOREST.parameters[4],
+        FOREST.parameters[5],
+        FOREST.parameters[6],
+        FOREST.parameters[7],
+        FOREST.parameters[8],
+        TOP_FEATURES,
+        ParameterSpec {
+            name: "task",
+            label: "Selection task",
+            parameter_type: ParameterType::String,
+            default: Some(DefaultValue::String("classification")),
+            rules: &[ParameterRule::OneOf {
+                values: &["classification", "regression"],
+            }],
+        },
+        ParameterSpec {
+            name: "output_column",
+            label: "Selected vector column",
+            parameter_type: ParameterType::String,
+            default: Some(DefaultValue::String("selected_features")),
+            rules: &[
+                ParameterRule::NonEmpty,
+                ParameterRule::DifferentFrom {
+                    parameter: "features_column",
+                },
+                ParameterRule::DifferentFrom {
+                    parameter: "label_column",
+                },
+            ],
+        },
+    ],
+    ..FOREST
+};
 pub(crate) const PREDICT: NodeSpec = NodeSpec {
     id: "predict",
     label: "Predict",
@@ -864,6 +1024,9 @@ pub fn builtin_nodes() -> &'static [&'static NodeSpec] {
         &CLASSIFIER_TREE,
         &CLASSIFIER_FOREST,
         &CLASSIFIER_METRICS,
+        &FEATURE_SELECTION,
+        &FEATURE_PIPELINE,
+        &FOREST_PIPELINE,
         &PREDICT,
         &PREVIEW,
     ]
@@ -932,6 +1095,17 @@ pub fn validate_specs(specs: &[&NodeSpec]) -> Result<(), RegistryError> {
                     ),
                     ParameterRule::LocalPath => p.parameter_type == ParameterType::String,
                     ParameterRule::UniqueItems => p.parameter_type == ParameterType::StringList,
+                    ParameterRule::MaxItems { max } => {
+                        p.parameter_type == ParameterType::StringList && *max > 0
+                    }
+                    ParameterRule::ItemsIn { parameter } => {
+                        p.parameter_type == ParameterType::StringList
+                            && *parameter != p.name
+                            && spec.parameters.iter().any(|other| {
+                                other.name == *parameter
+                                    && other.parameter_type == ParameterType::StringList
+                            })
+                    }
                     ParameterRule::IntegerRange { min, max } => {
                         p.parameter_type == ParameterType::UnsignedInteger && min <= max
                     }

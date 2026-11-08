@@ -468,6 +468,8 @@ impl Desktop {
 
     fn toolbar(&mut self, ctx: &egui::Context) {
         let choosing = self.file_dialogs.is_busy();
+        self.canvas.execution = self.session.node_statuses();
+        self.canvas.run_enabled = !self.active_job() && !self.has_unapplied() && !choosing;
         egui::TopBottomPanel::top("toolbar")
             .min_height(90.0)
             .show(ctx, |ui| {
@@ -536,6 +538,7 @@ impl Desktop {
                                 && !choosing,
                             egui::Button::new("Run project"),
                         )
+                        .on_hover_text("Lazy preview. To save inputs for node-by-node runs, use the green Run branch button on a Source.")
                         .clicked()
                     {
                         self.dispatch(run);
@@ -557,6 +560,7 @@ impl Desktop {
                                 && !choosing,
                             egui::Button::new("Run selected"),
                         )
+                        .on_hover_text("Lazy preview of the selected output; does not populate or refresh the node cache.")
                         .clicked()
                     {
                         self.dispatch(selected_run);
@@ -1025,6 +1029,12 @@ impl Desktop {
                 }
                 Action::Connect(edge) => {
                     self.dispatch(Command::Connect { edge });
+                }
+                Action::RunNode(node_id) => {
+                    self.dispatch(Command::RunNode { node_id });
+                }
+                Action::RunDownstream(node_id) => {
+                    self.dispatch(Command::RunDownstream { node_id });
                 }
             }
         }
