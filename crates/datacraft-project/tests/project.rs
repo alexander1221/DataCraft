@@ -64,3 +64,100 @@ fn relative_paths_resolve_against_project_not_cwd() {
         _ => panic!("sample source must be CSV"),
     }
 }
+
+#[test]
+fn incomplete_project_round_trips_saves_and_can_be_overwritten() {
+    let project =
+        Project::from_json(include_str!("../../../examples/pipelines/draft.dcraft")).unwrap();
+    assert!(project.validate().is_err());
+    project.validate_structure().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("draft.dcraft");
+    project.save(&path).unwrap();
+    assert_eq!(Project::load(&path).unwrap(), project);
+    project.save(&path).unwrap();
+    assert_eq!(
+        Project::load(&path).unwrap().to_json().unwrap(),
+        project.to_json().unwrap()
+    );
+}
+
+#[test]
+fn draft_placeholders_and_semantically_invalid_values_survive_serialization() {
+    let mut project = Project::from_json(SAMPLE).unwrap();
+    project.graph.nodes[0].config = datacraft_core::find_node("csv_source")
+        .unwrap()
+        .create_draft_config()
+        .unwrap();
+    project.graph.nodes[4].config = datacraft_core::NodeKind::TablePreview { rows: 0 };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("draft.dcraft");
+    project.save(&path).unwrap();
+    let loaded = Project::load(&path).unwrap();
+    assert_eq!(loaded, project);
+    assert!(loaded.validate().is_err());
+    assert_eq!(
+        loaded.resolved(&path).unwrap().graph.nodes[0].config,
+        project.graph.nodes[0].config
+    );
+}
+
+#[test]
+fn invalid_save_preserves_existing_file_and_no_nonfinite_value_is_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("safe.dcraft");
+    let mut project = Project::from_json(SAMPLE).unwrap();
+    project.save(&path).unwrap();
+    let original = fs::read(&path).unwrap();
+    project.graph.nodes[0].position[0] = f32::INFINITY;
+    assert!(project.save(&path).is_err());
+    assert_eq!(fs::read(&path).unwrap(), original);
+    project.graph.nodes[0].position[0] = 0.0;
+    project.graph.nodes[4].config = datacraft_core::NodeKind::LinearRegression {
+        label_column: "".into(),
+        features_column: "".into(),
+        fit_intercept: true,
+        max_iter: 0,
+        reg_param: f64::NAN,
+        elastic_net_param: 0.0,
+    };
+    assert!(project.save(&path).is_err());
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn loading_a_draft_never_accepts_structural_corruption() {
+    let original: serde_json::Value = serde_json::from_str(SAMPLE).unwrap();
+    for change in [
+        "missing_node",
+        "port",
+        "cycle",
+        "duplicate",
+        "incompatible",
+        "output",
+    ] {
+        let mut value = original.clone();
+        match change {
+            "missing_node" => {
+                value["edges"][0]["from"] = serde_json::json!(uuid::Uuid::from_u128(99))
+            }
+            "port" => value["edges"][0]["from_port"] = serde_json::json!("invalid"),
+            "cycle" => {
+                value["nodes"][0]["config"] = serde_json::json!({"kind":"limit","rows":0});
+                let edge = serde_json::json!({"from":value["nodes"][1]["id"],"from_port":"table","to":value["nodes"][0]["id"],"to_port":"table"});
+                value["edges"].as_array_mut().unwrap().push(edge);
+            }
+            "duplicate" => {
+                let n = value["nodes"][0].clone();
+                value["nodes"].as_array_mut().unwrap().push(n);
+            }
+            "incompatible" => {
+                value["nodes"][0]["config"] = serde_json::json!({"kind":"linear_regression","label_column":"","features_column":"","fit_intercept":true,"max_iter":0,"reg_param":0.0,"elastic_net_param":0.0});
+                value["edges"][0]["from_port"] = serde_json::json!("model");
+            }
+            "output" => value["output_node"] = value["nodes"][0]["id"].clone(),
+            _ => unreachable!(),
+        }
+        assert!(Project::from_json(&value.to_string()).is_err(), "{change}");
+    }
+}

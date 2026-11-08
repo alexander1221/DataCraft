@@ -2,6 +2,204 @@
 
 Дата: 2026-11-08. Среда: Windows, PowerShell, Python 3.14.3.
 
+## Полный прогон xtask в пользовательском PowerShell
+
+verified 2026-11-08 via предоставленный пользователем полный вывод
+`cargo fetch --locked` и `cargo xtask ci --with-spark`, Windows/JDK 21.0.13,
+завершение 14:29 по местному времени. Это отдельный пользовательский запуск,
+не повторное выполнение в ограниченной сессии агента.
+
+- fetch — PASS: недостающие 18 Cargo packages загружены.
+- fmt/check/test/Clippy — PASS: 66 Rust-тестов; одна ignored-функция служит
+  subprocess fixture и запускается прошедшим тестом отмены процесса.
+- layers — PASS: полный разрешённый normal/dev/build/target dependency graph.
+- commands/nodes — PASS: 17 команд и 9 определений нод.
+- sbt test writeClasspath — PASS: 6 Scala-тестов с настоящим Spark 4.0.1.
+- fixtures — PASS: sample/draft/regression/prediction, сравнение таблиц,
+  схем и значений с независимым oracle.
+- job_lifecycle — PASS: отмена после cleanup JVM, успешный следующий job,
+  обнаружение stale результата (snapshot revision 1, current revision 2).
+- Итог: `[PASS] requested CI checks completed`.
+
+Ограничения Cargo/sbt-кэша предыдущего агентского запуска не воспроизвелись
+в пользовательском терминале. Удалённый GitHub CI и Linux/macOS этим запуском
+не проверены. ASSUMPTION: ML-допуск 1e-6 остаётся предварительным acceptance
+threshold, не доказанной границей ошибки Spark solver.
+
+## Итерация xtask — предыдущий запуск в ограниченной сессии
+
+verified 2026-11-08 via локальные команды Windows/MSVC, Rust 1.99.1, JDK 21.0.13:
+
+- fmt/check/test/Clippy — PASS. Workspace: 66 пройденных тестов, включая
+  9 новых тестов политики зависимостей и comparator/manifest. Одна ignored-функция
+  остаётся subprocess fixture, запускаемой тестом отмены настоящего процесса.
+- `cargo xtask commands --offline` — PASS: 17 команд и независимый тест
+  соответствия enum/serde/parameter contracts.
+- `cargo xtask nodes --offline` — PASS: 9 нод, порты, параметры, defaults,
+  typed factories и семь registry contract tests.
+- `cargo xtask fixtures --offline --java <JDK21/bin/java.exe>` — PASS:
+  sample/draft/regression/prediction выполнены настоящим Spark через Session.
+  Схемы, имена таблиц, число строк и значения совпали с отдельным oracle
+  `examples/expected/pipelines.json`; draft имеет две ожидаемые readiness issues.
+- `cargo xtask layers --offline` — FAIL до анализа: Cargo metadata для всех
+  платформ требует отсутствующий в локальном кэше bitflags 2.13.2.
+  Повторный запуск без offline также FAIL: static.crates.io недоступен
+  (в диагностике, среди прочего, slab 0.4.12). Политика намеренно не заменена
+  урезанной проверкой только текущей ОС. Её шесть unit tests прошли, но это
+  не подтверждение успешного анализа реального полного workspace graph.
+- `cargo xtask ci --offline` — FAIL на layers после успешных Rust checks.
+  Полный `ci --with-spark` — NOT_RUN. Для повторения в обычном терминале:
+  `cargo fetch --locked`, затем `cargo xtask ci --with-spark`.
+- Повторный `sbt test writeClasspath` — FAIL при запуске launcher: нет доступа
+  к пользовательскому sbt boot/cache. Scala-тесты в этой итерации — NOT_RUN;
+  предыдущие шесть PASS сохраняются как исторический результат. Fixtures
+  использовали уже собранный worker и существующий classpath.txt.
+- GitHub workflow обновлён: Rust job запускает xtask ci; Spark job после
+  sbt проверяет fixtures и сохраняет CLI inspect/lifecycle smoke checks.
+  Новый удалённый workflow, Linux/macOS и независимое review — NOT_RUN.
+
+Логи локальные, игнорируются Git: `.tools/xtask-ci.log`, `xtask-layers.log`,
+`xtask-fixtures.log`, `xtask-sbt.log`. Layers не использует grep по Cargo.toml:
+нужен разрешённый Cargo metadata graph с normal/dev/build/target dependencies.
+ASSUMPTION: прежний абсолютный ML-допуск 1e-6 остаётся provisional acceptance
+threshold; численная эквивалентность solver не доказана. Fixtures явно печатает
+это допущение и не расширяет допуск по результату запуска.
+
+## Итерация фоновых jobs и отмены
+
+verified 2026-11-08 via локальные команды Windows/MSVC, Rust 1.99.1, JDK 21.0.13:
+
+- cargo fmt --all -- --check — PASS.
+- cargo check --workspace --locked --offline — PASS.
+- cargo test --workspace --locked --offline — PASS: 57 тестов
+  (22 core, 8 project, 23 engine, 4 CLI). Одна дополнительная ignored-функция —
+  subprocess fixture с sleep; она запускается отдельным настоящим процессом
+  из cancel_terminates_real_child_and_unblocks_reader. Это не пропущенная
+  проверка отмены: сам тест завершения процесса и разблокировки reader прошёл.
+- cargo clippy --workspace --all-targets --locked --offline -- -D warnings — PASS.
+- job_lifecycle example на настоящем JVM — exit 0: отмена после регистрации
+  worker, подтверждённый cleanup, следующий successful job, изменение проекта
+  во время работы и обнаружение stale результата revision 1 при current 2.
+  После финальной правки этапа Executing пример повторно прошёл.
+- CLI --timeout-seconds 1 run sample.dcraft — ожидаемый exit 1; диагностирован
+  именно TimedOut, а не ошибка аргументов. Runner дождался очистки JVM.
+- CLI sample/draft/regression/prediction и inspect sales.csv --rows 3 — exit 0
+  через новую фоновую реализацию. Sample/draft: (4,11)/(5,13)/(6,15);
+  regression: intercept≈3, coefficient≈2, training RMSE 3.13e-15;
+  Predict: 5/7/9/11/13 с округлением; inspect: три строки и исходная схема.
+- Дешёвая статика и git diff --check — PASS.
+
+Логи: .tools/jobs-checks/*.stdout.log, *.stderr.log и lifecycle-final.log.
+Unit tests контролируют scheduling через каналы/Condvar; synthetic results
+используются только для state machine, не как доказательство работы Spark.
+Отдельно проверены stop до установки handle, first-stop-wins, Busy, неизвестный
+Job ID, terminal events, bounded queue, timeout без polling, panic containment,
+best-effort stop при Drop и редактирование Session во время job.
+
+Run теперь возвращает JobStarted; cancel/status зарегистрированы и исполняемы.
+Вычисления и supervisor работают в отдельных std threads. Terminal status
+публикуется после cleanup. Каждый job создаёт JVM; graceful Spark group cancel,
+проценты выполнения и Ctrl+C CLI не реализованы. Новых зависимостей нет.
+
+Scala/protocol не менялись; sbt tests повторно не запускались. Новые CI-шаги,
+Linux/macOS и независимое review новой реализации — NOT_RUN. Во время проверки
+Clippy потребовал перенести Drop impl перед test module; замечание исправлено.
+ASSUMPTION: прежний ML-допуск 1e-6 по-прежнему требует численного обоснования.
+
+## Итерация Session и команд
+
+verified 2026-11-08 via локальные команды Windows/MSVC, Rust 1.99.1, JDK 21.0.13:
+
+- cargo fmt --all -- --check — PASS.
+- cargo check --workspace --locked --offline — PASS.
+- cargo test --workspace --locked --offline — PASS: 49 тестов
+  (22 core, 8 project, 15 engine, 4 CLI).
+- cargo clippy --workspace --all-targets --locked --offline -- -D warnings — PASS.
+- CLI commands --json: exit 0; 15 зарегистрированных исполняемых команд,
+  без фиктивной execution.cancel. Отдельный CLI-тест использует отсутствующую Java.
+- CLI validate sample и validate draft --draft: exit 0; черновик сообщает
+  две проблемы незавершённой ноды.
+- CLI run draft/sample/regression/prediction и inspect sales.csv --rows 3:
+  все exit 0 через Session и настоящий Spark worker. Draft/sample вернули
+  (4,11)/(5,13)/(6,15); regression — коэффициенты около 3/2 и RMSE 3.13e-15;
+  Predict — ожидаемые 5/7/9/11/13; inspect — три строки и исходную схему.
+  Логи: .tools/session-checks/*.stdout.log и *.stderr.log.
+- Статическая проверка артефактов и git diff --check — PASS.
+
+Проверены rollback ошибочных команд/Batch, восстановление рёбер/output,
+монотонные revisions, no-op/redo, лимит истории, dirty-checkpoints,
+ошибки open/save и rebasing current/undo/redo при SaveAs.
+Во время разработки исправлены конфликт имени Command со std::process::Command,
+неустойчивый порядок рёбер после reconnect и имя CLI-варианта, отклонённое Clippy.
+После исправлений команды выше выполнены успешно.
+
+CLI теперь использует Session для open/validate/run/inspect. История содержит
+только Project. Runtime config, JVM и ExecutionRecord отделены от .dcraft;
+результат помечается revision. Синхронный dispatch Run ещё нельзя отменить
+конкурентно; background jobs, progress, timeout и GUI в эту итерацию не входят.
+
+Для тестов engine добавлен tempfile как dev-dependency; пакет уже был в lock,
+новые пакеты не загружались. Scala/protocol не менялись, sbt tests не повторялись.
+Новые шаги CI не запускались удалённо; новая версия Linux/macOS и независимое
+review — NOT_RUN. ASSUMPTION: прежний ML-допуск 1e-6 остаётся необоснованным;
+эквивалентность исходным нодам не заявляется.
+
+## Итерация черновых проектов
+
+verified 2026-11-08 via локальные команды Windows, Rust 1.99.1, JDK 21.0.13:
+
+- fmt --check, cargo check --workspace --locked --offline — PASS.
+- cargo test --workspace --locked --offline — PASS: 33 теста
+  (9 graph, 6 core drafts, 7 registry, 8 project, 3 CLI).
+- cargo clippy --workspace --all-targets --locked --offline -- -D warnings — PASS.
+- CLI validate draft.dcraft --draft — exit 0, две ожидаемые диагностики
+  expression/missing table input на ноде UUID ...0006.
+- CLI run draft.dcraft — exit 0, строки (4,11)/(5,13)/(6,15), schema integer.
+  Неподключённая нода ...0006 не включена в план исполнения.
+- Прежние sample/regression/prediction выполнены через настоящий Spark worker,
+  все exit 0; регрессия сохранила коэффициенты около 3/2 и RMSE 3.13e-15.
+- Проверки malformed save сохраняют прежние байты файла; NaN/Inf не записываются
+  как null. Неполная выбранная ветка отклоняется до попытки запустить Java.
+- Дешёвая статическая проверка и git diff --check — PASS.
+
+Логи CLI: .tools/draft-checks/*.stdout.log и *.stderr.log. В первом тестовом
+прогоне обнаружена неоднозначность типа пустого Vec в assert_eq; тест исправлен
+на is_empty, затем все проверки выше выполнены успешно.
+Для CLI-тестов добавлена dev-dependency tempfile, уже используемая project crate;
+Cargo.lock обновлён настоящим Cargo offline, новые пакеты не загружались.
+
+Scala worker не менялся, sbt tests повторно не запускались. Linux/macOS и
+удалённый CI новой итерации — NOT_RUN. Приёмка независимым reviewer — NOT_RUN.
+ASSUMPTION: прежний численный допуск ML-тестов 1e-6 ещё требует обоснования;
+эта итерация меняет только правила допуска черновиков и выбора ветки.
+
+## Итерация NodeSpec
+
+verified 2026-11-08 via локальные команды Windows/MSVC, Rust 1.99.1:
+
+- cargo fmt --all -- --check — PASS.
+- cargo check --workspace --locked --offline — PASS.
+- cargo test --workspace --locked --offline — PASS: 21 тест
+  (9 graph, 7 registry, 4 project, 1 CLI discovery).
+- cargo clippy --workspace --all-targets --locked --offline -- -D warnings — PASS.
+- Прежние sample/regression/prediction .dcraft выполнены через настоящий
+  Rust CLI → Spark worker, все exit 0. Sample дал (4,11)/(5,13)/(6,15);
+  regression — intercept 2.9999999999999987, coefficient 2.0000000000000004,
+  training RMSE 3.1297001304428877e-15; Predict — 5/7/9/11/13 с округлением.
+  Логи: .tools/nodespec-checks/{sample,regression,prediction}.{stdout,stderr}.log.
+- CLI nodes --json проверен интеграционным тестом с заведомо отсутствующей
+  Java: discovery работает без JVM. В тестах проверены старые поля JSON,
+  типы/порты всех девяти нод, defaults, границы и ошибки metadata.
+- Дешёвая статическая проверка артефактов — PASS; git diff --check — PASS.
+
+Scala worker и протокол не менялись. sbt test в этой итерации не повторялся:
+его предыдущий результат 6/6 сохраняется как историческое свидетельство,
+а интеграция после изменения core проверена тремя настоящими CLI-прогонами.
+Новый шаг CI nodes --json добавлен, но изменения ещё не отправлены на GitHub:
+удалённый CI для этой итерации NOT_RUN. Независимое review и macOS/Linux
+прогон новой версии также NOT_RUN. Обоснование прежнего ML-допуска 1e-6
+остаётся открытым ASSUMPTION и этим рефакторингом не решается.
+
 ## Актуальный baseline после установки инструментов
 
 verified 2026-11-08 via реальные локальные команды: Rust/Cargo 1.99.1,

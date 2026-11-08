@@ -9,10 +9,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: cargo fmt --all -- --check
-      - run: cargo check --workspace --locked
-      - run: cargo test --workspace --locked
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo xtask ci
+      - run: cargo run --locked -p datacraft-cli -- nodes --json
+      - run: cargo run --locked -p datacraft-cli -- commands --json
 
   spark:
     runs-on: ubuntu-latest
@@ -27,7 +26,7 @@ jobs:
       - run: sbt test writeClasspath
         working-directory: workers/spark
       - run: cargo run --locked -p datacraft-cli -- validate examples/pipelines/sample.dcraft
-      - run: cargo run --locked -p datacraft-cli -- run examples/pipelines/sample.dcraft
-      - run: cargo run --locked -p datacraft-cli -- run examples/pipelines/regression.dcraft
-      - run: cargo run --locked -p datacraft-cli -- run examples/pipelines/prediction.dcraft
+      - run: cargo run --locked -p datacraft-cli -- validate examples/pipelines/draft.dcraft --draft
+      - run: cargo xtask fixtures
       - run: cargo run --locked -p datacraft-cli -- inspect examples/data/sales.csv
+      - run: cargo run --locked -p datacraft-engine --example job_lifecycle -- examples/pipelines/sample.dcraft

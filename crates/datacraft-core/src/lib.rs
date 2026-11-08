@@ -4,6 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod registry;
+pub use registry::{builtin_nodes, find_node, NodeSpec, ParameterError};
+
 pub const MAX_PREVIEW_ROWS: u32 = 1000;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -44,90 +47,50 @@ pub enum NodeKind {
     },
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum PortType {
     Table,
     Model,
 }
 
 impl NodeKind {
-    pub fn inputs(&self) -> Vec<(&'static str, PortType)> {
+    pub fn spec(&self) -> &'static NodeSpec {
         match self {
-            Self::CsvSource { .. } | Self::ParquetSource { .. } => vec![],
-            Self::Predict => vec![("table", PortType::Table), ("model", PortType::Model)],
-            _ => vec![("table", PortType::Table)],
+            Self::CsvSource { .. } => &registry::CSV,
+            Self::ParquetSource { .. } => &registry::PARQUET,
+            Self::Filter { .. } => &registry::FILTER,
+            Self::SelectColumns { .. } => &registry::SELECT,
+            Self::Limit { .. } => &registry::LIMIT,
+            Self::AssembleFeatures { .. } => &registry::ASSEMBLE,
+            Self::LinearRegression { .. } => &registry::REGRESSION,
+            Self::Predict => &registry::PREDICT,
+            Self::TablePreview { .. } => &registry::PREVIEW,
         }
+    }
+
+    pub fn inputs(&self) -> Vec<(&'static str, PortType)> {
+        self.spec()
+            .inputs
+            .iter()
+            .map(|p| (p.id, p.data_type))
+            .collect()
     }
 
     pub fn outputs(&self) -> Vec<(&'static str, PortType)> {
-        match self {
-            Self::LinearRegression { .. } => vec![("model", PortType::Model)],
-            Self::TablePreview { .. } => vec![],
-            _ => vec![("table", PortType::Table)],
-        }
+        self.spec()
+            .outputs
+            .iter()
+            .map(|p| (p.id, p.data_type))
+            .collect()
     }
 
     pub fn is_output(&self) -> bool {
-        matches!(
-            self,
-            Self::TablePreview { .. } | Self::LinearRegression { .. }
-        )
+        self.spec().selectable_output
     }
 
-    fn parameter_error(&self) -> Option<&'static str> {
-        let names_ok = |names: &[String]| {
-            !names.is_empty()
-                && names.iter().all(|s| !s.trim().is_empty())
-                && names.iter().collect::<BTreeSet<_>>().len() == names.len()
-        };
-        match self {
-            Self::CsvSource { path, .. } | Self::ParquetSource { path }
-                if path.trim().is_empty() || path.contains("://") =>
-            {
-                Some("expected a local filesystem path")
-            }
-            Self::Filter { expression } if expression.trim().is_empty() => {
-                Some("empty filter expression")
-            }
-            Self::SelectColumns { columns } if !names_ok(columns) => {
-                Some("columns must be nonempty and unique")
-            }
-            Self::AssembleFeatures {
-                columns,
-                output_column,
-            } if !names_ok(columns)
-                || output_column.trim().is_empty()
-                || columns.contains(output_column) =>
-            {
-                Some("invalid feature columns")
-            }
-            Self::Limit { rows } if *rows == 0 || *rows > i32::MAX as u32 => {
-                Some("limit must be between 1 and 2147483647")
-            }
-            Self::TablePreview { rows } if *rows == 0 || *rows > MAX_PREVIEW_ROWS => {
-                Some("preview rows must be between 1 and 1000")
-            }
-            Self::LinearRegression {
-                label_column,
-                features_column,
-                max_iter,
-                reg_param,
-                elastic_net_param,
-                ..
-            } if label_column.trim().is_empty()
-                || features_column.trim().is_empty()
-                || label_column == features_column
-                || *max_iter == 0
-                || *max_iter > i32::MAX as u32
-                || !reg_param.is_finite()
-                || *reg_param < 0.0
-                || !elastic_net_param.is_finite()
-                || !(0.0..=1.0).contains(elastic_net_param) =>
-            {
-                Some("invalid regression parameters")
-            }
-            _ => None,
-        }
+    pub fn validate_parameters(&self) -> Result<(), ParameterError> {
+        self.spec().validate_config(self)
     }
 }
 
@@ -178,9 +141,72 @@ pub enum GraphError {
     InvalidOutput(Uuid),
 }
 
+/// Recoverable draft issues, distinct from structural corruption.
+#[derive(Debug, Error, Serialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GraphDiagnostic {
+    #[error("node {node}: {error}")]
+    Parameters { node: Uuid, error: ParameterError },
+    #[error("required input missing: {node}:{port}")]
+    MissingInput { node: Uuid, port: String },
+}
+
+impl From<GraphDiagnostic> for GraphError {
+    fn from(diagnostic: GraphDiagnostic) -> Self {
+        match diagnostic {
+            GraphDiagnostic::Parameters { node, error } => Self::Parameters {
+                node,
+                message: error.message,
+            },
+            GraphDiagnostic::MissingInput { node, port } => Self::MissingInput { node, port },
+        }
+    }
+}
+
 impl Graph {
+    pub fn diagnostics(&self) -> Result<Vec<GraphDiagnostic>, GraphError> {
+        self.validate_structure()?;
+        Ok(self.collect_diagnostics())
+    }
+
+    fn collect_diagnostics(&self) -> Vec<GraphDiagnostic> {
+        let mut nodes: Vec<_> = self.nodes.iter().collect();
+        nodes.sort_by_key(|n| n.id);
+        let occupied: BTreeSet<_> = self
+            .edges
+            .iter()
+            .map(|e| (e.to, e.to_port.as_str()))
+            .collect();
+        let mut diagnostics = Vec::new();
+        for node in nodes {
+            if let Err(error) = node.config.validate_parameters() {
+                diagnostics.push(GraphDiagnostic::Parameters {
+                    node: node.id,
+                    error,
+                });
+            }
+            for input in node.config.spec().inputs {
+                if !occupied.contains(&(node.id, input.id)) {
+                    diagnostics.push(GraphDiagnostic::MissingInput {
+                        node: node.id,
+                        port: input.id.into(),
+                    });
+                }
+            }
+        }
+        diagnostics
+    }
     /// Validate the complete graph and return UUID-ordered deterministic Kahn traversal.
     pub fn validate(&self) -> Result<Vec<Uuid>, GraphError> {
+        let order = self.validate_structure()?;
+        if let Some(diagnostic) = self.collect_diagnostics().into_iter().next() {
+            return Err(diagnostic.into());
+        }
+        Ok(order)
+    }
+
+    /// Integrity only: disconnected inputs and unfinished parameters are allowed.
+    pub fn validate_structure(&self) -> Result<Vec<Uuid>, GraphError> {
         let mut nodes = BTreeMap::new();
         for node in &self.nodes {
             if nodes.insert(node.id, node).is_some() {
@@ -192,11 +218,18 @@ impl Graph {
                     message: "non-finite position",
                 });
             }
-            if let Some(message) = node.config.parameter_error() {
-                return Err(GraphError::Parameters {
-                    node: node.id,
-                    message,
-                });
+            if let NodeKind::LinearRegression {
+                reg_param,
+                elastic_net_param,
+                ..
+            } = &node.config
+            {
+                if !reg_param.is_finite() || !elastic_net_param.is_finite() {
+                    return Err(GraphError::Parameters {
+                        node: node.id,
+                        message: "non-finite numeric parameter",
+                    });
+                }
             }
         }
         let mut occupied = BTreeSet::new();
@@ -213,23 +246,25 @@ impl Graph {
                 .ok_or(GraphError::MissingNode(edge.to))?;
             let output = source
                 .config
-                .outputs()
-                .into_iter()
-                .find(|(p, _)| *p == edge.from_port)
+                .spec()
+                .outputs
+                .iter()
+                .find(|p| p.id == edge.from_port)
                 .ok_or_else(|| GraphError::Port {
                     node: edge.from,
                     port: edge.from_port.clone(),
                 })?;
             let input = target
                 .config
-                .inputs()
-                .into_iter()
-                .find(|(p, _)| *p == edge.to_port)
+                .spec()
+                .inputs
+                .iter()
+                .find(|p| p.id == edge.to_port)
                 .ok_or_else(|| GraphError::Port {
                     node: edge.to,
                     port: edge.to_port.clone(),
                 })?;
-            if output.1 != input.1 {
+            if output.data_type != input.data_type {
                 return Err(GraphError::Incompatible {
                     from: edge.from,
                     to: edge.to,
@@ -243,16 +278,6 @@ impl Graph {
             }
             *degrees.entry(edge.to).or_default() += 1;
             downstream.entry(edge.from).or_default().push(edge.to);
-        }
-        for (id, node) in &nodes {
-            for (port, _) in node.config.inputs() {
-                if !occupied.contains(&(*id, port.to_owned())) {
-                    return Err(GraphError::MissingInput {
-                        node: *id,
-                        port: port.to_owned(),
-                    });
-                }
-            }
         }
         let mut ready: BTreeSet<_> = degrees
             .iter()
@@ -301,7 +326,7 @@ impl Graph {
 
     /// Only the requested output's ancestors, in validated execution order.
     pub fn execution_order(&self, output: Uuid) -> Result<Vec<Uuid>, GraphError> {
-        let order = self.validate()?;
+        let order = self.validate_structure()?;
         self.output(Some(output))?;
         let mut required = BTreeSet::from([output]);
         let mut pending = vec![output];
@@ -312,6 +337,21 @@ impl Graph {
                 }
             }
         }
+        let branch = Graph {
+            nodes: self
+                .nodes
+                .iter()
+                .filter(|n| required.contains(&n.id))
+                .cloned()
+                .collect(),
+            edges: self
+                .edges
+                .iter()
+                .filter(|e| required.contains(&e.to))
+                .cloned()
+                .collect(),
+        };
+        branch.validate()?;
         Ok(order
             .into_iter()
             .filter(|id| required.contains(id))

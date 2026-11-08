@@ -1,0 +1,17 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[package.metadata.datacraft]
+layer = "tooling"
+
+[dependencies]
+clap = { version = "4", features = ["derive", "env"] }
+serde.workspace = true
+serde_json.workspace = true
+datacraft-core.workspace = true
+datacraft-project.workspace = true
+datacraft-engine.workspace = true

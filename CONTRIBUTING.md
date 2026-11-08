@@ -17,14 +17,15 @@ DataCraft находится на этапе headless Rust CLI и локальн
 Из корня workspace:
 
 ```sh
-cargo fmt --all -- --check
-cargo check --workspace --locked
-cargo test --workspace --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo run --locked -p datacraft-cli -- run examples/pipelines/sample.dcraft
-cargo run --locked -p datacraft-cli -- run examples/pipelines/regression.dcraft
-cargo run --locked -p datacraft-cli -- run examples/pipelines/prediction.dcraft
+cargo xtask ci
+cargo xtask fixtures
 ```
+
+Для полного прогона с пересборкой worker: `cargo xtask ci --with-spark`.
+Отдельные проверки: `cargo xtask layers`, `commands`, `nodes`. Каждый workspace
+crate обязан объявить `[package.metadata.datacraft] layer = "..."`; политика,
+включая dev/build/target зависимости, описана в
+[ARCHITECTURE_CHECKS.md](docs/ARCHITECTURE_CHECKS.md).
 
 При изменении worker выполните также `sbt test writeClasspath`. Не отмечайте
 неисполненные проверки как пройденные. Добавляйте тесты поведения и граничных

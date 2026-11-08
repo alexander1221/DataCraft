@@ -1,0 +1,52 @@
+{
+  "format_version": 1,
+  "numerical_assumption": "ASSUMPTION: ML absolute tolerance 1e-6 is the existing provisional WorkerSuite acceptance contract, not a derived Spark solver error bound.",
+  "pipelines": [
+    {
+      "project": "examples/pipelines/sample.dcraft",
+      "readiness_issues": 0,
+      "tables": [{
+        "name": "Preview",
+        "fields": [{"name":"quantity","data_type":"integer"},{"name":"amount","data_type":"integer"}],
+        "rows": [{"quantity":4,"amount":11},{"quantity":5,"amount":13},{"quantity":6,"amount":15}]
+      }]
+    },
+    {
+      "project": "examples/pipelines/draft.dcraft",
+      "readiness_issues": 2,
+      "tables": [{
+        "name": "Preview",
+        "fields": [{"name":"quantity","data_type":"integer"},{"name":"amount","data_type":"integer"}],
+        "rows": [{"quantity":4,"amount":11},{"quantity":5,"amount":13},{"quantity":6,"amount":15}]
+      }]
+    },
+    {
+      "project": "examples/pipelines/regression.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Coefficients",
+          "fields": [{"name":"parameter","data_type":"string"},{"name":"estimate","data_type":"double"}],
+          "rows": [{"parameter":"Intercept","estimate":3.0},{"parameter":"feature[0]","estimate":2.0}],
+          "absolute_tolerance": 0.000001
+        },
+        {
+          "name": "Training metrics",
+          "fields": [{"name":"metric","data_type":"string"},{"name":"value","data_type":"double"}],
+          "rows": [{"metric":"rmse","value":0.0},{"metric":"r2","value":1.0}],
+          "absolute_tolerance": 0.000001
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/prediction.dcraft",
+      "readiness_issues": 0,
+      "tables": [{
+        "name": "Preview",
+        "fields": [{"name":"quantity","data_type":"integer"},{"name":"amount","data_type":"integer"},{"name":"prediction","data_type":"double"}],
+        "rows": [{"quantity":1,"amount":5,"prediction":5.0},{"quantity":2,"amount":7,"prediction":7.0},{"quantity":3,"amount":9,"prediction":9.0},{"quantity":4,"amount":11,"prediction":11.0},{"quantity":5,"amount":13,"prediction":13.0}],
+        "absolute_tolerance": 0.000001
+      }]
+    }
+  ]
+}

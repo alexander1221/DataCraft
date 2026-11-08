@@ -42,18 +42,25 @@ impl Project {
             return Err(ProjectError::Version(version));
         }
         let project: Self = serde_json::from_value(value)?;
-        project.validate()?;
+        project.validate_structure()?;
         Ok(project)
     }
 
     pub fn validate(&self) -> Result<(), ProjectError> {
+        self.validate_structure()?;
+        self.graph.validate()?;
+        Ok(())
+    }
+
+    /// Allow incomplete parameters/inputs while rejecting corrupt project data.
+    pub fn validate_structure(&self) -> Result<(), ProjectError> {
         if self.format_version != FORMAT_VERSION {
             return Err(ProjectError::Version(self.format_version.into()));
         }
         if self.name.trim().is_empty() {
             return Err(ProjectError::EmptyName);
         }
-        self.graph.validate()?;
+        self.graph.validate_structure()?;
         if let Some(id) = self.output_node {
             self.graph.output(Some(id))?;
         }
@@ -65,7 +72,7 @@ impl Project {
     }
 
     pub fn to_json(&self) -> Result<String, ProjectError> {
-        self.validate()?;
+        self.validate_structure()?;
         let mut canonical = self.clone();
         canonical.graph.nodes.sort_by_key(|n| n.id);
         canonical.graph.edges.sort();
@@ -93,7 +100,7 @@ impl Project {
 
     /// Runtime copy only: keep persistent source paths relative in saved projects.
     pub fn resolved(&self, project_file: &Path) -> Result<Self, ProjectError> {
-        self.validate()?;
+        self.validate_structure()?;
         let directory = fs::canonicalize(project_file)?
             .parent()
             .unwrap_or(Path::new("."))
@@ -104,6 +111,11 @@ impl Project {
                 NodeKind::CsvSource { path, .. } | NodeKind::ParquetSource { path } => path,
                 _ => continue,
             };
+            // Preserve unfinished source values. Only a selected ready branch
+            // may execute; unrelated draft placeholders must not become paths.
+            if path.trim().is_empty() || path.contains("://") {
+                continue;
+            }
             let local = PathBuf::from(&*path);
             let absolute = if local.is_absolute() {
                 local

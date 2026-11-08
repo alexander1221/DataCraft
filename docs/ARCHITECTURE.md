@@ -4,13 +4,19 @@
 
 ```text
 apps/datacraft-cli          clap, команды и отображение результатов
-crates/datacraft-core       сериализуемый DAG, UUID, порты, валидация
+crates/datacraft-core       сериализуемый DAG, UUID, NodeSpec, порты, валидация
 crates/datacraft-project    .dcraft, версии, сохранение, разрешение путей
-crates/datacraft-engine     lifecycle JVM и клиент протокола
+crates/datacraft-engine     Session, CommandSpec, undo/redo, JobManager, JVM worker
+xtask                      архитектурная политика, реестры, Spark fixtures, CI
 workers/spark               Scala + Spark SQL / ML
 examples/data              небольшой CSV
 examples/pipelines         подготовленные проекты
+examples/expected          независимые ожидаемые схемы и значения
 ```
+
+Границы Rust crates проверяет `cargo xtask layers` по Cargo metadata; `commands`
+и `nodes` проверяют живые реестры, `fixtures` исполняет примеры через Session.
+Политика и ограничения: [ARCHITECTURE_CHECKS.md](ARCHITECTURE_CHECKS.md).
 
 UI и DataFusion не входят в текущий этап. Rust core не зависит от Spark.
 Для первой вертикали выбрана Spark 4.0.1 с Scala 2.13.16 и Java 17/21:
@@ -23,6 +29,19 @@ UI и DataFusion не входят в текущий этап. Rust core не з
 и ассеты в эту реализацию не переносились.
 
 ## Постоянная модель
+
+Проекты версии 1 допускают черновой граф. Load/save проверяют целостность,
+а не готовность к исполнению. Строгие Project::validate/Graph::validate
+сохраняют прежний смысл; Graph::diagnostics возвращает проблемы параметров
+и входов. Перед запуском проверяется готовность выбранного выхода и его
+предков. Детальный контракт: [PROJECT_FORMAT.md](PROJECT_FORMAT.md).
+
+Встроенные ноды имеют единый декларативный NodeSpec в core: category, порты
+с cardinality, параметры, defaults и ограничения. Graph читает metadata напрямую;
+NodeKind сохраняет типизированную JSON-конфигурацию. CLI nodes/--json использует
+тот же реестр, не запускает Spark. Details: [NODES.md](NODES.md).
+Scala worker остаётся отдельной реализацией backend и не импортирует Rust metadata;
+проверки протокола на границе процессов сохраняются.
 
 `.dcraft` содержит `format_version`, `name`, `nodes`, `edges`, `output_node`.
 Нода содержит UUID `id`, `position: [x, y]`, `config` с тегом `kind`.
@@ -38,7 +57,14 @@ UUID сохраняются независимо от будущих UI-инде
 
 ## Исполнение
 
-Полный граф проходит структурную проверку. Исполняется только замыкание
+CLI открывает проект через Session::dispatch(project.open), а выполнение
+передаёт execution.run. Session хранит Project за immutable API, current path,
+saved checkpoint и ограниченную историю. Runtime config, Worker и результаты
+отделены от snapshot Project и не сериализуются в .dcraft. UI state отсутствует.
+Точные правила атомарности и SaveAs: [COMMANDS.md](COMMANDS.md).
+
+Полный граф проходит проверку целостности; параметры и обязательные входы
+проверяются только для выбранной ветки. Исполняется только замыкание
 зависимостей выбранного выхода. Выход задаётся флагом CLI, затем `output_node`,
 затем единственным кандидатом `TablePreview` / `LinearRegression`.
 
@@ -68,9 +94,13 @@ JSON-объекты в `rows`. Неопределённые числовые м�
 
 ## Границы первой версии
 
-Нет кэша между запросами, сохранения моделей, прогресса или GUI event loop.
-`Worker::run` блокирует вызывающий поток; будущий desktop должен использовать
-background thread. Метод `cancel` завершает процесс, но текущий API не даёт
-вызывать его конкурентно с `run`; полноценный job handle ещё предстоит сделать.
+Нет кэша данных между запросами, сохранения моделей, прогресса или GUI event loop.
+Каждый job создаёт свой JVM; Scala DataFrame/ML objects остаются
+локальными одному запросу. Результаты помечаются project_revision; это проверка
+снимка графа, а не обнаружение внешних изменений dataset или runtime settings.
+Низкоуровневый Worker::run блокирует runner thread; Session::dispatch(Run)
+возвращает Job ID. Supervisor отдельно обрабатывает cancel/deadline, не захватывая
+reader stdout. Терминальный статус означает завершение cleanup. Контракт:
+[EXECUTION.md](EXECUTION.md). Процент выполнения Spark и Ctrl+C CLI пока отсутствуют.
 Spark SQL и ML могут требовать значительную память независимо от лимита preview.
 Заявления об универсальном out-of-core исполнении отсутствуют.

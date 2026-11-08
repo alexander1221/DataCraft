@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/datacraft-core", "crates/datacraft-project", "crates/datacraft-engine", "apps/datacraft-cli"]
+members = ["crates/datacraft-core", "crates/datacraft-project", "crates/datacraft-engine", "apps/datacraft-cli", "xtask"]
 resolver = "2"
 
 [workspace.package]

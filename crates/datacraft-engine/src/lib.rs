@@ -1,11 +1,17 @@
 //! Single-job, blocking worker client. Use from a background thread in a future UI.
+pub mod commands;
+pub mod jobs;
+pub mod session;
+pub use commands::{Command, CommandSpec, COMMANDS};
 use datacraft_project::Project;
 use serde::{Deserialize, Serialize};
+pub use session::{CommandPayload, Session, SessionError, WorkerConfig};
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     path::Path,
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::{Child, ChildStdin, ChildStdout, Command as ProcessCommand, Stdio},
+    sync::{Arc, Mutex},
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -36,7 +42,7 @@ pub struct ResultTable {
     pub rows: Vec<serde_json::Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ExecutionResult {
     pub tables: Vec<ResultTable>,
 }
@@ -53,16 +59,35 @@ struct Response {
 }
 
 pub struct Worker {
-    child: Child,
+    child: Arc<Mutex<Child>>,
     input: Option<ChildStdin>,
     output: BufReader<ChildStdout>,
+}
+
+/// Cloneable process control; it never needs the blocking response reader.
+#[derive(Clone)]
+pub struct WorkerCancellation {
+    child: Arc<Mutex<Child>>,
+}
+
+impl WorkerCancellation {
+    pub fn terminate(&self) -> Result<(), EngineError> {
+        let mut child = self
+            .child
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        if child.try_wait()?.is_none() {
+            child.kill()?;
+        }
+        Ok(())
+    }
 }
 
 impl Worker {
     /// The classpath is produced by `sbt writeClasspath`; no shell is involved.
     pub fn start(java: &Path, classpath_file: &Path) -> Result<Self, EngineError> {
         let classpath = fs::read_to_string(classpath_file)?;
-        let mut command = Command::new(java);
+        let mut command = ProcessCommand::new(java);
         for module in [
             "java.lang",
             "java.lang.invoke",
@@ -95,7 +120,7 @@ impl Worker {
             .take()
             .ok_or_else(|| EngineError::Protocol("missing stdout".into()))?;
         Ok(Self {
-            child,
+            child: Arc::new(Mutex::new(child)),
             input: Some(input),
             output: BufReader::new(output),
         })
@@ -106,7 +131,7 @@ impl Worker {
         project: &Project,
         output: Option<Uuid>,
     ) -> Result<ExecutionResult, EngineError> {
-        project.validate()?;
+        project.validate_structure()?;
         let output = project.graph.output(output.or(project.output_node))?;
         let order = project.graph.execution_order(output)?;
         let request_id = Uuid::new_v4();
@@ -160,11 +185,19 @@ impl Worker {
     /// Coarse cancellation: terminate the worker. Start a new session after cancellation.
     pub fn cancel(&mut self) -> Result<(), EngineError> {
         self.input.take();
-        if self.child.try_wait()?.is_none() {
-            self.child.kill()?;
-        }
-        self.child.wait()?;
+        let termination = self.cancellation_handle().terminate();
+        self.child
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .wait()?;
+        termination?;
         Ok(())
+    }
+
+    pub fn cancellation_handle(&self) -> WorkerCancellation {
+        WorkerCancellation {
+            child: Arc::clone(&self.child),
+        }
     }
 }
 
