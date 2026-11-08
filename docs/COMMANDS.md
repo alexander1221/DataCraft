@@ -20,7 +20,7 @@ Dispatcher проверяет availability. Правка применяется 
 ## §3. Применения
 
 Редактирование черновика без GUI; атомарное удаление ноды с рёбрами; пакет правок
-одним undo; сохранение и продолжение работы; общий API для CLI и будущего GUI/MCP.
+одним undo; сохранение и продолжение работы; общий API для CLI, GUI и будущего MCP.
 Drag завершается одной Move-командой; live drag остаётся временным UI state.
 
 ## §4. Контракт
@@ -42,11 +42,17 @@ Metadata отделена от handlers. Все доступные команд�
 | graph.batch | атомарный пакет только проектных правок | да, одна запись |
 | history.undo / history.redo | восстановить снимок | сами не записываются |
 | project.open | открыть проект; dirty требует discard_changes=true | нет |
+| project.new | создать пустой проект с именем; dirty требует discard_changes=true | нет |
 | project.save | сохранить по текущему пути | нет |
 | project.save_as | сохранить в указанный файл | нет |
 | execution.run | выполнить выбранную ветку через Spark | нет |
 | execution.cancel | запросить остановку текущего Job ID | нет |
 | execution.status | получить JobInfo | нет |
+
+В реестре 18 команд. New принимает name и optional discard_changes (default false).
+Пустое имя отвергается без изменения Session. New/Open запрещены при активном
+job, очищают history, завершённый job и предыдущие результаты. New сбрасывает
+path и saved checkpoint; до SaveAs проект dirty. Revision возрастает.
 
 Default limit истории: 100 снимков; 0 отключает undo. Это ограничение числа
 снимков, не памяти в байтах. Snapshot содержит только граф и metadata, без данных.

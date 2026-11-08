@@ -38,8 +38,8 @@ ci без --with-spark выполняет Rust fmt/check/test/Clippy и три �
 
 ## §4. Контракт политики
 
-Текущие слои: core, project, engine, cli, tooling. Дополнительно определены
-types/graph/nodes/planner/runtime/connectors/mcp/ui для будущих реальных crates.
+Текущие слои: core, project, engine, cli, ui, tooling. Дополнительно определены
+types/graph/nodes/planner/runtime/connectors/mcp для будущих реальных crates.
 Пустые crates не создаются. Неизвестный/неуказанный layer — ошибка.
 
 | Layer | Разрешённые прямые workspace dependencies |

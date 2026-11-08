@@ -758,6 +758,14 @@ mod tests {
             .unwrap();
         assert!(
             !session
+                .availability(&crate::Command::New {
+                    name: "Blocked".into(),
+                    discard_changes: true
+                })
+                .enabled
+        );
+        assert!(
+            !session
                 .availability(&crate::Command::Open {
                     path: "irrelevant".into(),
                     discard_changes: true
@@ -780,5 +788,37 @@ mod tests {
         session.dispatch(crate::Command::Undo).unwrap();
         assert_eq!(session.revision(), 3);
         assert!(!session.result_is_current());
+    }
+
+    #[test]
+    fn project_lifecycle_clears_completed_jobs_and_does_not_resurrect_old_results() {
+        for new_project in [true, false] {
+            let mut session = Session::default();
+            let info = session
+                .jobs
+                .spawn(0, no_deadline(), |_| Ok(record(0)))
+                .unwrap();
+            session
+                .wait_for_execution(info.id, Duration::from_secs(5))
+                .unwrap();
+            assert!(session.last_execution().is_some());
+            let command = if new_project {
+                crate::Command::New {
+                    name: "Empty".into(),
+                    discard_changes: false,
+                }
+            } else {
+                crate::Command::Open {
+                    path: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../examples/pipelines/sample.dcraft"),
+                    discard_changes: false,
+                }
+            };
+            session.dispatch(command).unwrap();
+            session.poll_execution();
+            assert!(session.last_execution().is_none());
+            assert!(session.current_job().is_none());
+            assert!(session.job_result(info.id).is_err());
+        }
     }
 }

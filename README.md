@@ -1,7 +1,8 @@
 # DataCraft
 
 Нативная local-first среда визуальной обработки данных. Первый этап — headless
-основание на Rust и локальный Scala worker с Apache Spark. GUI ещё не реализован.
+основание на Rust и локальный Scala worker с Apache Spark. Добавлен первый
+desktop-клиент на eframe/egui для просмотра графа и запуска preview.
 
 **Статус:** исходный код первой вертикали написан. Все шесть тестов Scala worker
 прошли с настоящим Spark на Windows/JDK 21 после исправления Parquet fixture.
@@ -30,6 +31,9 @@ Rust fmt/check/test/Clippy прошли; CSV preview, обучение и пре
 - CLI `validate`, `run`, `inspect`; ошибки приводят к ненулевому exit code.
 - `cargo xtask`: контроль зависимостей слоёв, реестров команд/нод и эталонных
   pipeline через настоящий Spark с проверкой схем и значений.
+- Desktop: New/Open/Save, палитра девяти типов нод, создание/удаление, canvas
+  со связями, выбор/перемещение, редактируемые параметры с Apply/Revert,
+  Connect/Disconnect, Undo/Redo, Run/Cancel и таблица результатов.
 
 ## Требования и сборка
 
@@ -42,6 +46,9 @@ Spark 4.0.1 / Scala 2.13.16 подключаются через sbt; отдел�
 Остальные зависимости: serde 1, serde_json 1, uuid 1, thiserror 2, tempfile 3,
 clap 4; Scala JSON — ujson 4.2.1, тесты — MUnit 1.0.4. Точные разрешённые
 версии Rust-зависимостей зафиксированы в Cargo.lock.
+Desktop использует eframe/egui 0.33.3 с Glow, X11/Wayland backends; версия
+выбрана по проверенному API. Дополнительная установка GUI-библиотек на Windows
+не потребовалась. Native запуск на других ОС этой итерацией не подтверждён.
 
 Следующие команды предназначены для подготовленного окружения. Какие именно
 проверки выполнены, указано в docs/VALIDATION.md:
@@ -60,6 +67,7 @@ cargo run -p datacraft-cli -- run examples/pipelines/sample.dcraft
 cargo run -p datacraft-cli -- run examples/pipelines/regression.dcraft
 cargo run -p datacraft-cli -- run examples/pipelines/prediction.dcraft
 cargo run -p datacraft-cli -- inspect examples/data/sales.csv --rows 5
+cargo run -p datacraft-desktop -- examples/pipelines/sample.dcraft
 ```
 
 `writeClasspath` компилирует worker и записывает абсолютный classpath в
@@ -85,7 +93,7 @@ cargo run -p datacraft-engine --example job_lifecycle -- examples/pipelines/samp
 
 Второй пример проверяет отмену настоящего JVM, следующий запуск и устаревание
 результата при редактировании во время работы. CLI ждёт завершения фонового job;
-GUI сможет отдельно опрашивать status/events. Отмена завершает локальный JVM,
+Desktop отдельно опрашивает status/events. Отмена завершает локальный JVM,
 новый job создаёт новый процесс.
 
 `sample.dcraft`: CSV → Filter → Select Columns → Limit → Table Preview.
@@ -115,8 +123,9 @@ cargo xtask ci --with-spark
 
 ## Ограничения
 
-- Desktop-приложение, редактор графа, train/test split и категоризация пока
-  отсутствуют. Команды запуска desktop нет.
+- В desktop пути вводятся в строку; native file picker отсутствует.
+  Порты соединяются двумя нажатиями (выход → вход), drag-to-connect пока нет.
+  Train/test split и категоризация пока отсутствуют.
 - Preview ограничен 1000 строками и ответом 8 MiB. Это не ограничение памяти
   отдельной широкой строки, парсера или обучения модели.
 - Источники и промежуточные таблицы остаются внутри JVM; Rust получает только
@@ -145,6 +154,8 @@ Spark использует локальные TCP-соединения и вре
 Формат и проверки черновиков: [docs/PROJECT_FORMAT.md](docs/PROJECT_FORMAT.md).
 Session и команды: [docs/COMMANDS.md](docs/COMMANDS.md).
 Фоновые задания и отмена: [docs/EXECUTION.md](docs/EXECUTION.md).
+Первый desktop и управление canvas: [docs/DESKTOP.md](docs/DESKTOP.md).
+Редактор нод, параметров и связей: [docs/GRAPH_EDITOR.md](docs/GRAPH_EDITOR.md).
 Следующие этапы: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 Правила участия и проверки перед PR: [CONTRIBUTING.md](CONTRIBUTING.md).

@@ -13,7 +13,7 @@ fn command_discovery_uses_engine_registry_without_java() {
         .unwrap();
     assert!(output.status.success());
     let commands: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    assert_eq!(commands.as_array().unwrap().len(), 17);
+    assert_eq!(commands.as_array().unwrap().len(), 18);
     let add = commands
         .as_array()
         .unwrap()

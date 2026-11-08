@@ -4,6 +4,7 @@
 
 ```text
 apps/datacraft-cli          clap, команды и отображение результатов
+apps/datacraft-desktop      eframe/egui, canvas, Session adapter, preview
 crates/datacraft-core       сериализуемый DAG, UUID, NodeSpec, порты, валидация
 crates/datacraft-project    .dcraft, версии, сохранение, разрешение путей
 crates/datacraft-engine     Session, CommandSpec, undo/redo, JobManager, JVM worker
@@ -18,7 +19,8 @@ examples/expected          независимые ожидаемые схемы 
 и `nodes` проверяют живые реестры, `fixtures` исполняет примеры через Session.
 Политика и ограничения: [ARCHITECTURE_CHECKS.md](ARCHITECTURE_CHECKS.md).
 
-UI и DataFusion не входят в текущий этап. Rust core не зависит от Spark.
+Первый UI-клиент находится в отдельном crate слоя ui. DataFusion пока отсутствует.
+Rust core не зависит от Spark или egui.
 Для первой вертикали выбрана Spark 4.0.1 с Scala 2.13.16 и Java 17/21:
 [требования Spark](https://spark.apache.org/docs/4.0.1/).
 Это фиксированная исходная цель совместимости, а не утверждение о последней версии.
@@ -60,7 +62,11 @@ UUID сохраняются независимо от будущих UI-инде
 CLI открывает проект через Session::dispatch(project.open), а выполнение
 передаёт execution.run. Session хранит Project за immutable API, current path,
 saved checkpoint и ограниченную историю. Runtime config, Worker и результаты
-отделены от snapshot Project и не сериализуются в .dcraft. UI state отсутствует.
+отделены от snapshot Project и не сериализуются в .dcraft. Desktop хранит выбор,
+pan/zoom, незавершённые drag/connection и буфер параметров отдельно. Постоянные
+правки Add/Remove/Configure/Connect/Disconnect и завершённый Move отправляются
+в Session. Палитра и поля инспектора читают NodeSpec. Подробнее:
+[DESKTOP.md](DESKTOP.md), [GRAPH_EDITOR.md](GRAPH_EDITOR.md).
 Точные правила атомарности и SaveAs: [COMMANDS.md](COMMANDS.md).
 
 Полный граф проходит проверку целостности; параметры и обязательные входы
@@ -94,7 +100,8 @@ JSON-объекты в `rows`. Неопределённые числовые м�
 
 ## Границы первой версии
 
-Нет кэша данных между запросами, сохранения моделей, прогресса или GUI event loop.
+Нет кэша данных между запросами, сохранения моделей или процентного прогресса Spark.
+GUI event loop опрашивает Session и не вызывает блокирующий Worker::run.
 Каждый job создаёт свой JVM; Scala DataFrame/ML objects остаются
 локальными одному запросу. Результаты помечаются project_revision; это проверка
 снимка графа, а не обнаружение внешних изменений dataset или runtime settings.

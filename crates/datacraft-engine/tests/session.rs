@@ -8,7 +8,13 @@ fn id(n: u128) -> Uuid {
     Uuid::from_u128(n)
 }
 fn sample() -> Project {
-    Project::from_json(include_str!("../../../examples/pipelines/sample.dcraft")).unwrap()
+    let mut project =
+        Project::from_json(include_str!("../../../examples/pipelines/sample.dcraft")).unwrap();
+    // Session tests choose their own input layout; users may move the public example's nodes.
+    for (index, node) in project.graph.nodes.iter_mut().enumerate() {
+        node.position = [index as f32 * 240.0, 0.0];
+    }
+    project
 }
 fn session() -> Session {
     Session::from_project(sample(), 100).unwrap()
@@ -33,6 +39,66 @@ fn move_node() -> Command {
         node_id: id(1),
         position: [42.0, 12.0],
     }
+}
+
+#[test]
+fn new_project_is_guarded_atomic_and_not_part_of_undo_history() {
+    let mut s = Session::default();
+    let result = s
+        .dispatch(Command::New {
+            name: "Untitled".into(),
+            discard_changes: false,
+        })
+        .unwrap();
+    assert!(matches!(
+        result.payload,
+        datacraft_engine::CommandPayload::Created
+    ));
+    assert_eq!(s.project().unwrap().name, "Untitled");
+    assert!(s.project().unwrap().graph.nodes.is_empty());
+    assert!(s.is_dirty());
+    assert!(s.path().is_none());
+    assert!(!s.can_undo());
+    rejects_without_change(
+        &mut s,
+        Command::New {
+            name: "Replacement".into(),
+            discard_changes: false,
+        },
+    );
+    rejects_without_change(
+        &mut s,
+        Command::New {
+            name: " ".into(),
+            discard_changes: true,
+        },
+    );
+    s.dispatch(Command::Rename {
+        name: "Edited".into(),
+    })
+    .unwrap();
+    assert!(s.can_undo());
+    let revision = s.revision();
+    s.dispatch(Command::New {
+        name: "Replacement".into(),
+        discard_changes: true,
+    })
+    .unwrap();
+    assert_eq!(s.revision(), revision + 1);
+    assert!(!s.can_undo());
+    assert!(!s.can_redo());
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("empty.dcraft");
+    s.dispatch(Command::SaveAs { path: path.clone() }).unwrap();
+    assert!(!s.is_dirty());
+    assert_eq!(Project::load(&path).unwrap().name, "Replacement");
+    s.dispatch(Command::New {
+        name: "Another".into(),
+        discard_changes: false,
+    })
+    .unwrap();
+    assert!(s.path().is_none());
+    assert!(s.is_dirty());
 }
 
 #[test]

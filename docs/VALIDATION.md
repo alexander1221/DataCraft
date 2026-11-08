@@ -2,6 +2,100 @@
 
 Дата: 2026-11-08. Среда: Windows, PowerShell, Python 3.14.3.
 
+## Редактор нод, параметров и связей
+
+verified 2026-11-08 via локальные команды Windows/MSVC, Rust 1.99.1,
+eframe/egui 0.33.3, JDK 21.0.13:
+
+- `cargo xtask ci --offline` — PASS: fmt/check/test/Clippy, слои,
+  18 command contracts и 9 NodeSpec. 81 Rust-тест, одна subprocess fixture ignored
+  (выполняется отдельным процессом из теста отмены).
+- Новые проверки desktop — PASS: typed round-trip всех нод; ошибки u32/f64,
+  NaN/Inf, Boolean, строки/списки; input events инспектора с Apply/Revert и Undo;
+  сохранение буфера при смене selection/New/Open; отказ Save при ошибке числа
+  без создания файла; палитра, Delete/Disconnect и Undo с incident edges;
+  save/load неполного графа; output→input через pointer events, Escape;
+  отказ при цикле/несовместимом типе без изменения графа/истории.
+- Новые проверки engine — PASS: project.new защищает dirty/active job,
+  проверяет имя, сбрасывает path/history/checkpoint, сохраняет пустой граф.
+  New/Open после завершения job не возвращают старые результаты при polling.
+  Для проверки lifecycle используется явно synthetic scheduler, не fake Spark.
+- Отдельный opt-in `run_button_executes_real_spark_and_preview_is_rendered`
+  с feature spark-integration-tests — PASS: Run через egui input и настоящий
+  Spark вернул (4,11)/(5,13)/(6,15). Затем UI изменил Filter на quantity>=5,
+  Apply и повторный Run вернули точно (5,13)/(6,15)/(7,17). New очистил результат.
+  Это один дополнительный тест вне обычных 81, с двумя настоящими JVM jobs.
+- Clippy desktop с feature spark-integration-tests — PASS.
+- `cargo xtask fixtures --offline --java <JDK21/bin/java.exe>` — PASS:
+  sample/draft/regression/prediction совпали с JSON oracle по схемам и значениям.
+- Native startup sample с --smoke-frames 3 — PASS, exit 0, project loaded=true.
+  Просмотрен новый снимок настоящего Glow window: палитра, New project, граф
+  с пользовательской раскладкой. `.tools/graph-editor-window.png` ignored.
+- Повторный `job_lifecycle` на настоящем JVM — PASS: cancellation confirmed
+  after cleanup, следующий запуск успешен, stale revision 1/current 2 обнаружен.
+- Scala worker не менялся, sbt tests повторно — NOT_RUN; их прежний PASS
+  остаётся историческим. GitHub CI новой итерации, Linux/macOS GUI и независимое
+  review новых UI/lifecycle изменений — NOT_RUN.
+
+Сохранённый пользователем `examples/pipelines/sample.dcraft` содержит изменённые
+координаты нод; файл не откатывался. Два старых Session-теста сначала упали из-за
+предположения об исходной позиции (0,0). Их helper теперь задаёт собственную
+детерминированную входную раскладку, независимо от редактируемого примера.
+Тестовые assertions атомарности и Undo сохранены. Тест модального перехода
+учитывает начальный sizing pass egui Area перед проверкой/нажатием кнопок.
+
+Пользователь до этой итерации подтвердил native preview, движение нод и отсутствие
+наблюдаемых зависаний; это приёмка предыдущего viewer, не всех новых жестов.
+Ручная приёмка полного редактора/Save as/dirty-close/Cancel ещё нужна.
+Логи: `.tools/editor-ci.log`, `editor-tests.log`, `editor-spark.log`,
+`editor-fixtures.log`, `editor-native-final.log`, `editor-clippy-spark.log`,
+`editor-lifecycle.log`. Дешёвый validator и git diff --check — PASS.
+ASSUMPTION: ML threshold 1e-6 не изменён, его solver error bound не обоснован.
+
+## Первый desktop-клиент
+
+verified 2026-11-08 via локальные команды агента, Windows/MSVC, Rust 1.99.1,
+eframe/egui 0.33.3, JDK 21.0.13:
+
+- Первоначальный fetch в ограниченной сессии — FAIL: нет доступа к index.crates.io.
+  Пользователь затем выполнил fetch в PowerShell: 264 crates загружены.
+  Последующие Cargo checks выполнялись по реальному Cargo.lock из кэша.
+- `cargo xtask ci --offline` — PASS: fmt/check/test/Clippy, layers, commands,
+  nodes. 70 Rust-тестов (66 прежних + 4 desktop); subprocess fixture по-прежнему
+  единственная ignored-функция. Desktop в layer=ui; headless crates без egui.
+- Desktop tests — PASS: неподвижность Project при render/selection,
+  сохранение проекта/selection/view при ошибке Open, сохранение точки при zoom,
+  реальные pointer events drag с ровно одной Move action после release.
+  Проверяется также, что строка Project path рисуется внутри toolbar clip rect.
+- `cargo test --locked --offline -p datacraft-desktop --features
+  spark-integration-tests run_button_executes_real_spark_and_preview_is_rendered`
+  с DATACRAFT_JAVA=JDK21/bin/java.exe — PASS: отдельный opt-in тест нажимает
+  Run через egui input, дожидается настоящего Spark и проверяет точные строки
+  (4,11)/(5,13)/(6,15), одну таблицу и отрисованный preview с числом строк.
+  Его нет в обычных 70 тестах, он запускался отдельно, без fake worker response.
+- Дополнительный Clippy desktop с feature spark-integration-tests — PASS.
+- Native startup `cargo run --locked --offline -p datacraft-desktop --
+  examples/pipelines/sample.dcraft --smoke-frames 3` — PASS, exit 0:
+  отрисованы нативные frames, project loaded=true, приложение завершилось.
+- Снимок настоящего Glow window через диагностический feature eframe/__screenshot
+  — PASS: видны пять нод, связи, путь проекта, кнопки, Inspector и Results.
+  После просмотра исправлены тема и обрезание второй строки toolbar; добавлен
+  regression assertion. Снимок: `.tools/desktop-window.png` (локальный, ignored).
+- Scala-код не менялся; sbt tests и четыре fixture pipeline повторно не
+  запускались в этой итерации. Свежий полный PASS baseline — предыдущий блок.
+  Новый Spark UI-тест, в отличие от этих исторических проверок, исполнен сейчас.
+- GitHub workflow дополнен Linux native smoke через Xvfb, системными GUI
+  prerequisites и отдельным Spark UI-тестом. Этот обновлённый workflow — NOT_RUN
+  удалённо; ранее прошедший Linux headless CI относится к ffb6288.
+
+Логи: `.tools/desktop-ci-final.log`, `desktop-tests.log`, `desktop-spark-test.log`,
+`desktop-native.log`, `desktop-screenshot.log`, `desktop-clippy-spark.log`.
+Ручные native сценарии Save as/dirty-close/Cancel/Undo и независимое review
+нового UI — NOT_RUN. Headless UI input test не заменяет эту ручную приёмку.
+Создание/удаление нод, редактирование параметров/соединений, native file picker
+не реализованы; параметры только для чтения. ASSUMPTION: прежний ML threshold
+1e-6 не изменён и по-прежнему не является доказанной границей ошибки solver.
+
 ## Полный прогон xtask в пользовательском PowerShell
 
 verified 2026-11-08 via предоставленный пользователем полный вывод

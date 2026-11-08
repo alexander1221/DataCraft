@@ -46,6 +46,12 @@ pub enum Command {
     Cancel { job_id: Uuid },
     #[serde(rename = "execution.status")]
     JobStatus { job_id: Uuid },
+    #[serde(rename = "project.new")]
+    New {
+        name: String,
+        #[serde(default)]
+        discard_changes: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -261,6 +267,24 @@ pub const COMMANDS: &[CommandSpec] = &[
             required: true,
         }],
     },
+    CommandSpec {
+        id: "project.new",
+        label: "New project",
+        mutates_project: true,
+        undoable: false,
+        parameters: &[
+            CommandParameter {
+                name: "name",
+                parameter_type: CommandParameterType::String,
+                required: true,
+            },
+            CommandParameter {
+                name: "discard_changes",
+                parameter_type: CommandParameterType::Boolean,
+                required: false,
+            },
+        ],
+    },
 ];
 
 impl Command {
@@ -284,6 +308,7 @@ impl Command {
             Self::Run { .. } => 14,
             Self::Cancel { .. } => 15,
             Self::JobStatus { .. } => 16,
+            Self::New { .. } => 17,
         }]
     }
 }

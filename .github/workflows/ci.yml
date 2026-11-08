@@ -9,7 +9,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev xvfb
       - run: cargo xtask ci
+      - run: xvfb-run -a cargo run --locked -p datacraft-desktop -- examples/pipelines/sample.dcraft --smoke-frames 3
       - run: cargo run --locked -p datacraft-cli -- nodes --json
       - run: cargo run --locked -p datacraft-cli -- commands --json
 
@@ -23,10 +25,12 @@ jobs:
           java-version: '21'
       - uses: sbt/setup-sbt@v1
       - uses: dtolnay/rust-toolchain@stable
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev
       - run: sbt test writeClasspath
         working-directory: workers/spark
       - run: cargo run --locked -p datacraft-cli -- validate examples/pipelines/sample.dcraft
       - run: cargo run --locked -p datacraft-cli -- validate examples/pipelines/draft.dcraft --draft
       - run: cargo xtask fixtures
+      - run: cargo test --locked -p datacraft-desktop --features spark-integration-tests run_button_executes_real_spark_and_preview_is_rendered
       - run: cargo run --locked -p datacraft-cli -- inspect examples/data/sales.csv
       - run: cargo run --locked -p datacraft-engine --example job_lifecycle -- examples/pipelines/sample.dcraft

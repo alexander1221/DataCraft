@@ -1,21 +1,23 @@
 # Дальнейшая разработка
 
+## Текущий фундамент
+
+NodeSpec, черновики, Session с командами/undo, фоновые jobs, отмена/timeout
+и xtask реализованы. Desktop создаёт проекты, добавляет/удаляет ноды, изменяет
+параметры и связи через Session, сохраняет граф и предоставляет Run/Cancel/preview.
+Контракты: DESKTOP.md и GRAPH_EDITOR.md;
+фактические результаты проверок — VALIDATION.md.
+
 ## Ближайшие три задачи
 
-1. NodeSpec, черновики и Session с типизированными командами/undo реализованы.
-   Фоновые jobs, события этапов, timeout и принудительная отмена JVM реализованы.
-   Добавлены автоматические проверки границ crates, registries и fixtures
-   через xtask; полнота локального прогона и ограничения окружения отражены
-   в VALIDATION.md. Rust-проверки,
-   шесть Scala-тестов и сквозные CSV/ML-примеры уже прошли; актуальные результаты
-   находятся в VALIDATION.md. При рефакторинге сохранить эти сценарии.
-2. Добавить train/test split с seed и обучаемую preprocessing pipeline:
+1. Улучшить desktop: native file picker, переименование проекта, поиск нод,
+   multi-selection и drag-to-connect. Сохранить единые команды и undo.
+2. Пройти ручную приёмку полного редактора, Save as/dirty-close и проверить GUI
+   на Linux. Улучшить просмотр широких таблиц и схем, подсказки ошибок у нод.
+3. Добавить train/test split с seed и обучаемую preprocessing pipeline:
    StringIndexer + OneHotEncoder. `fit` только на train, `transform` на test;
    сохранять preprocessing вместе с моделью. Проверить неизвестные категории,
    sparse vectors, соответствие коэффициентов исходным признакам.
-3. Добавить desktop на eframe/egui: canvas, инспектор, загрузку/сохранение
-   чернового графа и запуск preview через существующий background job handle;
-   добавить GUI polling и действия Run/Cancel.
 
 ## После первой вертикали
 

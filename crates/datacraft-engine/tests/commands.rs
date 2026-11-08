@@ -50,6 +50,10 @@ fn registry_matches_every_json_command_and_parameter_contract() {
         Command::Run { output: None },
         Command::Cancel { job_id: id },
         Command::JobStatus { job_id: id },
+        Command::New {
+            name: "New graph".into(),
+            discard_changes: false,
+        },
     ];
     assert_eq!(commands.len(), COMMANDS.len());
     let mut seen = BTreeSet::new();

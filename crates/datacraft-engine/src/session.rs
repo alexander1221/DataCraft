@@ -66,6 +66,7 @@ pub struct ExecutionRecord {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CommandPayload {
     None,
+    Created,
     Opened { path: PathBuf },
     Saved { path: PathBuf },
     JobStarted { job_id: Uuid, project_revision: u64 },
@@ -76,6 +77,7 @@ pub enum CommandPayload {
 #[derive(Debug, Serialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum SessionEvent {
+    Created,
     ProjectChanged { revision: u64 },
     Opened { path: PathBuf },
     Saved { path: PathBuf },
@@ -202,14 +204,18 @@ impl Session {
 
     pub fn availability(&self, command: &Command) -> CommandAvailability {
         let reason = match command {
-            Command::Open { .. } if self.jobs.is_busy() => {
+            Command::Open { .. } | Command::New { .. } if self.jobs.is_busy() => {
                 Some("execution is active; cancel or wait before opening another project")
             }
             Command::Open {
                 discard_changes: false,
                 ..
+            }
+            | Command::New {
+                discard_changes: false,
+                ..
             } if self.is_dirty() => Some("unsaved changes; save or explicitly discard"),
-            Command::Open { .. } => None,
+            Command::Open { .. } | Command::New { .. } => None,
             Command::Cancel { .. } | Command::JobStatus { .. } => None,
             _ if self.project.is_none() => Some("no project open"),
             Command::Undo if !self.can_undo() => Some("undo history is empty"),
@@ -290,6 +296,26 @@ impl Session {
                     self.revision = revision;
                     CommandPayload::None
                 }
+                Command::New { name, .. } => {
+                    let project = Project {
+                        format_version: datacraft_project::FORMAT_VERSION,
+                        name,
+                        graph: Default::default(),
+                        output_node: None,
+                    };
+                    project.validate_structure()?;
+                    let revision = self.next_revision()?;
+                    self.project = Some(project);
+                    self.saved = None;
+                    self.path = None;
+                    self.undo.clear();
+                    self.redo.clear();
+                    self.last_execution = None;
+                    self.jobs = JobManager::default();
+                    self.revision = revision;
+                    events.push(SessionEvent::Created);
+                    CommandPayload::Created
+                }
                 Command::Open { path, .. } => {
                     let path = std::fs::canonicalize(path)?;
                     let mut project = Project::load(&path)?;
@@ -301,6 +327,7 @@ impl Session {
                     self.undo.clear();
                     self.redo.clear();
                     self.last_execution = None;
+                    self.jobs = JobManager::default();
                     self.revision = revision;
                     events.push(SessionEvent::Opened { path: path.clone() });
                     CommandPayload::Opened { path }
