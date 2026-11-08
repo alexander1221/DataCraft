@@ -526,3 +526,48 @@ fn save_as_rebases_existing_undo_snapshots() {
     assert_eq!(s.project().unwrap().graph.nodes[0].position, [0.0, 0.0]);
     assert!(s.is_dirty());
 }
+
+#[test]
+fn json_source_save_as_rebases_history_and_unsaved_relative_path_is_rejected() {
+    let dir = tempfile::tempdir().unwrap();
+    let old = dir.path().join("old");
+    let new = dir.path().join("new");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::create_dir(&new).unwrap();
+    let data = old.join("rows.jsonl");
+    std::fs::write(&data, "{\"quantity\":1,\"amount\":5}\n").unwrap();
+    let mut project = sample();
+    project.graph.nodes[0].config = NodeKind::JsonSource {
+        path: "rows.jsonl".into(),
+    };
+    let mut s = Session::from_project(project.clone(), 100).unwrap();
+    s.configure_worker(WorkerConfig {
+        java: "absent-java".into(),
+        classpath_file: "absent-classpath".into(),
+    });
+    assert!(matches!(
+        s.dispatch(Command::Run { output: None }),
+        Err(SessionError::RelativeSourceWithoutProject)
+    ));
+    let initial = old.join("project.dcraft");
+    project.save(&initial).unwrap();
+    s.dispatch(Command::Open {
+        path: initial,
+        discard_changes: true,
+    })
+    .unwrap();
+    s.dispatch(move_node()).unwrap();
+    let next = new.join("project.dcraft");
+    s.dispatch(Command::SaveAs { path: next.clone() }).unwrap();
+    for command in [Command::Undo, Command::Redo] {
+        s.dispatch(command).unwrap();
+        let resolved = s.project().unwrap().resolved(&next).unwrap();
+        let NodeKind::JsonSource { path } = &resolved.graph.nodes[0].config else {
+            panic!("JSON expected")
+        };
+        assert_eq!(
+            Path::new(path).canonicalize().unwrap(),
+            data.canonicalize().unwrap()
+        );
+    }
+}

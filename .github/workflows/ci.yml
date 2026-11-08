@@ -31,6 +31,6 @@ jobs:
       - run: cargo run --locked -p datacraft-cli -- validate examples/pipelines/sample.dcraft
       - run: cargo run --locked -p datacraft-cli -- validate examples/pipelines/draft.dcraft --draft
       - run: cargo xtask fixtures
-      - run: cargo test --locked -p datacraft-desktop --features spark-integration-tests run_button_executes_real_spark_and_preview_is_rendered
+      - run: cargo test --locked -p datacraft-desktop --features spark-integration-tests run_button -- --test-threads=1
       - run: cargo run --locked -p datacraft-cli -- inspect examples/data/sales.csv
       - run: cargo run --locked -p datacraft-engine --example job_lifecycle -- examples/pipelines/sample.dcraft

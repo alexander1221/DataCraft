@@ -5,25 +5,56 @@
 NodeSpec, черновики, Session с командами/undo, фоновые jobs, отмена/timeout
 и xtask реализованы. Desktop создаёт проекты, добавляет/удаляет ноды, изменяет
 параметры и связи через Session, сохраняет граф и предоставляет Run/Cancel/preview.
-Контракты: DESKTOP.md и GRAPH_EDITOR.md;
+Добавлены системные Open/Save as, Browse CSV/Parquet/JSON и Rename с Undo/Redo;
+ручной ввод путей сохранён. Контракты: DESKTOP.md, GRAPH_EDITOR.md, FILE_DIALOGS.md;
 фактические результаты проверок — VALIDATION.md.
 
-## Ближайшие три задачи
+## Подготовка данных: реализованный пакет
 
-1. Улучшить desktop: native file picker, переименование проекта, поиск нод,
-   multi-selection и drag-to-connect. Сохранить единые команды и undo.
-2. Пройти ручную приёмку полного редактора, Save as/dirty-close и проверить GUI
-   на Linux. Улучшить просмотр широких таблиц и схем, подсказки ошибок у нод.
-3. Добавить train/test split с seed и обучаемую preprocessing pipeline:
-   StringIndexer + OneHotEncoder. `fit` только на train, `transform` на test;
-   сохранять preprocessing вместе с моделью. Проверить неизвестные категории,
-   sparse vectors, соответствие коэффициентов исходным признакам.
+Добавлены NDJSON Source, grouped Train/Test Split с seed и key_columns,
+Make Design Matrix (RFormula), Index Categoricals, Reference Code Categoricals
+и Transform. Fit получает train, Transform применяет модель к test без fit.
+Assemble Features принимает числовые колонки и ML-векторы. Контракт, примеры
+и ограничения: [PREPROCESSING.md](PREPROCESSING.md). Полный исходный список
+Spark-нод пока не перенесён.
+Настройки source пока фиксированы: JSON — NDJSON, CSV — header/infer_schema.
+
+## Регрессия: реализованный пакет
+
+GLM (gaussian/binomial/poisson/gamma), Decision Tree Regressor и Random Forest
+Regressor отдают fitted Model в общий Predict. Regression Metrics рассчитывает
+RMSE/MSE/MAE/R² на явно поданном наборе. Три новых примера обучаются на train,
+оцениваются на test; старый отчёт training metrics Linear Regression сохранён.
+Контракт и ограничения: [REGRESSION.md](REGRESSION.md).
+
+## Классификация: реализованный пакет
+
+Logistic Regression и Linear SVM (LinearSVC, L2, binary 0/1), Decision Tree
+Classifier и Random Forest Classifier (также multiclass), общий Predict и
+Classification Metrics. Четыре примера обучаются на train и оцениваются на test.
+Метрики: accuracy, weighted precision/recall/F1. Всего 24 типа нод.
+Контракты и ограничения: [CLASSIFICATION.md](CLASSIFICATION.md).
+Исходная L1 SVMWithSGD не переносилась дословно; эквивалентность не заявляется.
+
+## Следующие пакеты Spark-нод
+
+1. **Отбор признаков:** Feature Selection, Feature Selection Pipeline,
+   Random Forest Pipeline с корректным разделением fit/transform.
+2. **Модели и совместимость:** сохранение/загрузка модели вместе с preprocessing,
+   воспроизводимые параметры/схемы и проверка совместимости примеров.
+
+Каждый пакет включает работающий backend, NodeSpec, параметры/порты GUI,
+пример pipeline и независимые проверки результатов. Не добавлять ноды-заглушки.
+Полная эквивалентность исходным нодам не считается доказанной только из-за
+совпадения названий. Срок полного переноса пока не оценён.
+
+Полировка GUI не блокирует следующие пакеты. Отдельно остаются ручная
+приёмка диалогов на всех целевых ОС, широкие таблицы/схемы, поиск нод,
+multi-selection и drag-to-connect.
 
 ## После первой вертикали
 
-- Сохранение и загрузка обученных моделей, явная политика перезаписи артефактов.
-- Random Forest, Logistic Regression, GLM с проверенными метриками.
-- Отбор признаков: современный DataFrame API и явно описанная статистика.
+- Явная политика перезаписи артефактов моделей и экспорта.
 - Схема входов в инспекторе, отображение типов, обработка пропусков.
 - Ограничение размеров отдельных значений preview и нагрузки worker.
 - Проверки Windows/Linux и упаковка приложения с документированным JVM runtime.

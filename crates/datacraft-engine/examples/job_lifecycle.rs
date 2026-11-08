@@ -65,8 +65,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     else {
         return Err("expected recovery job".into());
     };
-    session.dispatch(Command::Rename {
-        name: "Edited while the snapshot runs".into(),
+    session.dispatch(Command::ConfigureNode {
+        node_id: uuid::Uuid::from_u128(2),
+        config: datacraft_core::NodeKind::Filter {
+            expression: "quantity >= 5".into(),
+        },
     })?;
     let terminal = session.wait_for_execution(job_id, Duration::from_secs(70))?;
     if terminal.status != JobStatus::Completed {

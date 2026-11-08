@@ -20,6 +20,30 @@ pub enum NodeKind {
     ParquetSource {
         path: String,
     },
+    JsonSource {
+        path: String,
+    },
+    TrainTestSplit {
+        key_columns: Vec<String>,
+        train_fraction: f64,
+        seed: u32,
+    },
+    MakeDesignMatrix {
+        formula: String,
+        features_column: String,
+        label_column: String,
+        keep_unknown: bool,
+    },
+    IndexCategoricals {
+        columns: Vec<String>,
+        keep_unknown: bool,
+    },
+    ReferenceCodeCategoricals {
+        columns: Vec<String>,
+        keep_unknown: bool,
+        drop_last: bool,
+    },
+    Transform,
     Filter {
         expression: String,
     },
@@ -41,6 +65,80 @@ pub enum NodeKind {
         reg_param: f64,
         elastic_net_param: f64,
     },
+    GeneralizedLinearRegression {
+        label_column: String,
+        features_column: String,
+        family: String,
+        link: String,
+        fit_intercept: bool,
+        max_iter: u32,
+        reg_param: f64,
+    },
+    DecisionTreeRegressor {
+        label_column: String,
+        features_column: String,
+        max_depth: u32,
+        max_bins: u32,
+        min_instances_per_node: u32,
+        seed: u32,
+    },
+    RandomForestRegressor {
+        label_column: String,
+        features_column: String,
+        max_depth: u32,
+        max_bins: u32,
+        min_instances_per_node: u32,
+        seed: u32,
+        num_trees: u32,
+        bootstrap: bool,
+        feature_subset_strategy: String,
+    },
+    RegressionMetrics {
+        label_column: String,
+        prediction_column: String,
+    },
+    LogisticRegression {
+        label_column: String,
+        features_column: String,
+        fit_intercept: bool,
+        max_iter: u32,
+        reg_param: f64,
+        elastic_net_param: f64,
+        threshold: f64,
+    },
+    LinearSvc {
+        label_column: String,
+        features_column: String,
+        fit_intercept: bool,
+        max_iter: u32,
+        reg_param: f64,
+        threshold: f64,
+    },
+    DecisionTreeClassifier {
+        label_column: String,
+        features_column: String,
+        max_depth: u32,
+        max_bins: u32,
+        min_instances_per_node: u32,
+        seed: u32,
+        impurity: String,
+    },
+    RandomForestClassifier {
+        label_column: String,
+        features_column: String,
+        max_depth: u32,
+        max_bins: u32,
+        min_instances_per_node: u32,
+        seed: u32,
+        num_trees: u32,
+        bootstrap: bool,
+        feature_subset_strategy: String,
+        impurity: String,
+    },
+    ClassificationMetrics {
+        label_column: String,
+        prediction_column: String,
+    },
     Predict,
     TablePreview {
         rows: u32,
@@ -59,11 +157,26 @@ impl NodeKind {
         match self {
             Self::CsvSource { .. } => &registry::CSV,
             Self::ParquetSource { .. } => &registry::PARQUET,
+            Self::JsonSource { .. } => &registry::JSON,
+            Self::TrainTestSplit { .. } => &registry::SPLIT,
+            Self::MakeDesignMatrix { .. } => &registry::DESIGN,
+            Self::IndexCategoricals { .. } => &registry::INDEX,
+            Self::ReferenceCodeCategoricals { .. } => &registry::REFERENCE,
+            Self::Transform => &registry::TRANSFORM,
             Self::Filter { .. } => &registry::FILTER,
             Self::SelectColumns { .. } => &registry::SELECT,
             Self::Limit { .. } => &registry::LIMIT,
             Self::AssembleFeatures { .. } => &registry::ASSEMBLE,
             Self::LinearRegression { .. } => &registry::REGRESSION,
+            Self::GeneralizedLinearRegression { .. } => &registry::GLM,
+            Self::DecisionTreeRegressor { .. } => &registry::TREE,
+            Self::RandomForestRegressor { .. } => &registry::FOREST,
+            Self::RegressionMetrics { .. } => &registry::METRICS,
+            Self::LogisticRegression { .. } => &registry::LOGISTIC,
+            Self::LinearSvc { .. } => &registry::SVC,
+            Self::DecisionTreeClassifier { .. } => &registry::CLASSIFIER_TREE,
+            Self::RandomForestClassifier { .. } => &registry::CLASSIFIER_FOREST,
+            Self::ClassificationMetrics { .. } => &registry::CLASSIFIER_METRICS,
             Self::Predict => &registry::PREDICT,
             Self::TablePreview { .. } => &registry::PREVIEW,
         }
@@ -216,6 +329,18 @@ impl Graph {
                 return Err(GraphError::Parameters {
                     node: node.id,
                     message: "non-finite position",
+                });
+            }
+            if matches!(&node.config,NodeKind::TrainTestSplit {train_fraction,..} if !train_fraction.is_finite())
+                || matches!(&node.config,NodeKind::GeneralizedLinearRegression {reg_param,..} if !reg_param.is_finite())
+                || matches!(&node.config,NodeKind::LogisticRegression {reg_param,elastic_net_param,threshold,..}
+                    if !reg_param.is_finite() || !elastic_net_param.is_finite() || !threshold.is_finite())
+                || matches!(&node.config,NodeKind::LinearSvc {reg_param,threshold,..}
+                    if !reg_param.is_finite() || !threshold.is_finite())
+            {
+                return Err(GraphError::Parameters {
+                    node: node.id,
+                    message: "non-finite numeric parameter",
                 });
             }
             if let NodeKind::LinearRegression {

@@ -55,7 +55,7 @@ enum Commands {
         #[arg(long)]
         output: Option<Uuid>,
     },
-    /// Read a bounded CSV/Parquet preview and schema.
+    /// Read a bounded CSV/Parquet/NDJSON preview and schema.
     Inspect {
         path: PathBuf,
         #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u32).range(1..=1000))]
@@ -152,6 +152,9 @@ fn execute(cli: Cli) -> Result<(), Box<dyn Error>> {
             let source = Uuid::new_v4();
             let preview = Uuid::new_v4();
             let config = match path.extension().and_then(|s| s.to_str()) {
+                Some("json" | "jsonl" | "ndjson") => NodeKind::JsonSource {
+                    path: path.to_string_lossy().into_owned(),
+                },
                 Some("parquet") => NodeKind::ParquetSource {
                     path: path.to_string_lossy().into_owned(),
                 },

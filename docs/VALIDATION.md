@@ -2,6 +2,295 @@
 
 Дата: 2026-11-08. Среда: Windows, PowerShell, Python 3.14.3.
 
+## Читаемость графа и актуальность результатов
+
+verified 2026-11-08 via Windows/MSVC и локальные команды.
+Контракт: [EDITOR_READABILITY.md](EDITOR_READABILITY.md).
+
+| Проверка | Фактический результат |
+|---|---|
+| cargo xtask --offline ci | PASS: fmt/check/tests/Clippy, layers, commands, nodes |
+| Workspace tests | PASS: 108 тестов, один subprocess fixture ignored (вызывается родительским) |
+| Clippy --workspace --all-targets --all-features --locked --offline -- -D warnings | PASS |
+| Scala compiler + JUnitCore | PASS: 32 реальных Spark/MUnit-теста после пересохранения раскладки |
+| Opt-in readability_run_button | PASS: два JVM jobs, Move/Rename во время Run, последующие Move/Undo, Configure invalidation, повторный Run |
+| job_lifecycle | PASS: отмена с cleanup и recovery; stale проверяется изменением Filter вместо Rename |
+| Native logistic_regression.dcraft --smoke-frames 4 | PASS: project loaded, четыре кадра, exit 0 |
+
+Arrange протестирован через настоящий egui button: все moves — один Undo,
+параметры/связи не меняются. Pure layout tests проверяют детерминированность
+при перестановке nodes/edges, отсутствие пересечения node rectangles,
+возрастание X по рёбрам и разнесение train/test. Инструмент arrange_projects
+использует только Session Open/Batch/Save; прямой зависимости UI→project нет.
+Изменены координаты 11 поставляемых fit/transform-примеров. sample.dcraft
+пользователя и AGENTS.md не менялись. Open не переставляет пользовательские ноды.
+
+В real Spark UI test измерены координаты ячеек первой test row: между правым
+краем id=9 и левым краем x=-2.5 минимум 20 logical pixels. Move/Rename во время
+job сохраняют current result несмотря на различие project revision. После
+Configure результат stale; computational Undo остаётся консервативно stale,
+новый Run снова даёт current. Unit state fixtures отдельно проверяют Save as
+rebasing и atomic failures; они не выдаются за Spark-исполнение.
+
+Первоначальные FAIL исправлены: Clippy потребовал вынести state tests в отдельный
+модуль; architecture checker отклонил временную dev UI→project зависимость —
+utility/tests переписаны через Session. UI test сначала проверял last_execution
+до финального polling frame: terminal status мог появиться между кадрами;
+добавлен финальный frame, затем проверен результат. Все указанные gates повторно PASS.
+
+Попытка PrintWindow capture — NOT_USABLE: сначала MainWindowHandle указывал на
+маленькое служебное окно, затем правильное окно Glow дало белый client area.
+Это не визуальная приёмка исправленной раскладки. Тестовый процесс закрыт через
+WM_CLOSE по окну DataCraft, принадлежащему только его PID. Отдельный native
+smoke успешно завершился с exit 0; геометрия/содержимое проверены egui tests.
+
+Логи (ignored): `.tools/readability-{ci,ui-spark,scala,lifecycle,clippy-features,
+native,build,arrange}.log`. Новый удалённый Actions run, Linux/macOS,
+независимое review и ручная приёмка новой геометрии — NOT_RUN. Полный fixtures
+прогон в этой итерации отдельно не повторялся; Spark suite и preview/recovery
+исполнялись реально. Worker production-код и dependencies не менялись.
+Раскладка не гарантирует ноль пересечений; external data changes не отслеживаются.
+
+## Пакет классификации: 24 типа нод
+
+verified 2026-11-08 via Windows/MSVC, Rust 1.99.1, JDK 21.0.13,
+Scala 2.13.16, Spark 4.0.1, MUnit 1.0.4/JUnit 4.13.2.
+Новые kind: logistic_regression, linear_svc, decision_tree_classifier,
+random_forest_classifier, classification_metrics. Контракт и независимые
+ожидания: [CLASSIFICATION.md](CLASSIFICATION.md).
+
+| Проверка | Фактический результат |
+|---|---|
+| cargo xtask --offline ci | PASS: fmt, check, tests, Clippy, layers, commands, nodes |
+| Workspace tests | PASS: 103 теста; один subprocess fixture ignored, запускается родительским тестом |
+| Clippy --workspace --all-targets --all-features --locked --offline -- -D warnings | PASS, включая новый opt-in GUI test |
+| Scala compiler + JUnitCore | PASS: 32 настоящих MUnit-теста, включая 24 предыдущих |
+| cargo xtask fixtures | PASS: 13 проектов, схемы и scalar values совпадают с независимыми oracles |
+| CLI Logistic Regression, обычный target/classpath.txt | PASS: accuracy и три weighted метрики = 1 |
+| CLI Linear SVM --output ...000009 | PASS: четыре test predictions 0/0/1/1 |
+| Opt-in classification_metrics_run_button | PASS: mouse click запускает настоящий JVM, четыре метрики отрисованы |
+| Native logistic_regression.dcraft --smoke-frames 4 | PASS: проект загружен, четыре кадра, exit 0 |
+| sbt test writeClasspath | FAIL до компиляции: отказ доступа к sbt.boot.lock в sandbox |
+
+Scala-проверки: все четыре binary pipeline исполняют train→preprocessing→Predict
+на test; Tree/Forest также проверены на трёх классах и entropy. Logistic threshold
+0/1 меняет решения; probability имеет две конечные компоненты в [0,1]. LinearSVC
+возвращает rawPrediction без выдуманной probability. Bootstrap forest повторяет
+предсказания с одинаковым seed в данном Spark runtime.
+
+Для сбалансированного confusion oracle все четыре метрики точно 0.5; perfect
+multiclass и perfect 1000-class оценка дают ровно 1. Неверная классификация
+единственного target-класса даёт 0 без деления на ноль. После изменения только
+test labels предсказания 0/0/1/1 сохранены, а все метрики стали 0. Это отдельный
+leakage-тест, не snapshot собственного вывода.
+
+Проверены null/NaN/Infinity, отрицательные/дробные/out-of-int32 IDs, пустые
+данные, неправильные схемы, reserved columns, разреженная нумерация train
+labels, multiclass для binary estimator, invalid impurity и >1000 labels/cells.
+Эти случаи возвращают recoverable errors; после ошибки проверен успешный запрос.
+Сборка warning-free; старые regression numerical assumptions не менялись.
+
+Metrics суммирует weighted числители до деления на n, чтобы простой perfect
+набор с большим числом классов не накапливал сумму округлённых долей >1.
+Weighted recall выводится из тождества с accuracy для single-label задачи.
+После этого уточнения повторён полный Scala suite и проверки затронутых примеров.
+Это не гарантия точности Double-агрегаций на произвольных данных.
+
+Новые четыре проекта включены в round-trip/path tests и egui inspector rendering;
+там каждый узел проверен через ParameterEditor без Java. Отдельный opt-in тест
+использует настоящий worker; ручной Run в настоящем окне — NOT_RUN, native
+startup проверен отдельно. CI Run-button filter автоматически включает этот тест.
+
+Fallback Scala build использует установленные compiler/MUnit jars, те же JVM
+add-opens/Xmx2g, что в build.sbt. Восемь проверенных production .class скопированы
+только в локальный workspace target; новые Maven/Cargo dependencies не добавлены.
+Это не успешный sbt run; на свежем checkout используйте `sbt test writeClasspath`.
+
+Логи (ignored): `.tools/classification-{ci,scala,fixtures,cli-metrics,cli-preview,
+ui-spark,clippy-features,native,sbt}.log`; compiler/JUnit args в .tools/preprocessing.
+Повторные CLI-прогоны после уточнения weighted суммирования:
+`.tools/classification-final-{logistic_regression,linear_svc,decision_tree_classifier,random_forest_classifier}.log`.
+NOT_RUN: новый удалённый Actions run, новые ноды на Linux/macOS, независимое
+review, полный `ci --with-spark` через sbt; Job lifecycle отдельно не повторялся.
+Ограничения: binary Logistic/SVC, L2 SVM вместо legacy L1, numeric contiguous
+train labels, до 1000 занятых confusion cells, без ROC/AUC и сохранения моделей.
+
+## Пакет регрессии: 19 типов нод
+
+verified 2026-11-08 via Windows/MSVC, Rust 1.99.1, JDK 21.0.13,
+Scala 2.13.16, Spark 4.0.1, MUnit 1.0.4/JUnit 4.13.2.
+Новые executable kind: generalized_linear_regression, decision_tree_regressor,
+random_forest_regressor, regression_metrics. Контракт: [REGRESSION.md](REGRESSION.md).
+
+| Проверка | Фактический результат |
+|---|---|
+| cargo xtask --offline ci | PASS: fmt, workspace check/tests/Clippy, layers, commands, nodes |
+| Обычные workspace tests | PASS: 101 тест, один subprocess fixture ignored (запускается родительским тестом) |
+| cargo clippy --workspace --all-targets --all-features --locked --offline -- -D warnings | PASS, включая новый opt-in GUI test |
+| Scala main/tests compiler и JUnitCore | PASS: 24 MUnit-теста с настоящим Spark; deprecation warnings устранены |
+| cargo xtask fixtures | PASS: девять проектов, схемы и значения соответствуют независимым oracles |
+| CLI random_forest.dcraft, обычный target/classpath.txt | PASS: RMSE/MSE/MAE=0, R²=1 |
+| CLI random_forest.dcraft --output ...000009 | PASS: две test rows, prediction=2/10 при x=1/7 |
+| Opt-in regression_metrics_run_button test | PASS: два настоящих JVM jobs через GUI adapter, метрики и null R² отрисованы |
+| Native random_forest.dcraft --smoke-frames 4 | PASS: окно загружает проект, четыре кадра, exit 0 |
+| sbt test writeClasspath | FAIL до компиляции: sandbox запрещает доступ к sbt.boot.lock |
+
+Новые Scala-тесты проверяют четыре GLM family на известных постоянных response,
+GLM gaussian на y=2x+3, Tree/RF на аналитически заданных листьях, реальный
+fit/predict/metrics protocol, repeated bootstrap forest с seed. Для labels=[1,3],
+predictions=[2,2] точно проверены RMSE=MSE=MAE=1, R²=0; constant/single target
+возвращает R²=null. Ошибки пустого набора, null/NaN/Infinity, overflow, типов
+схемы и GLM domain не заменяются исключением строк или нулевыми метриками.
+
+Отдельный leakage-тест меняет только test labels на 5: predictions остаются
+2/10, MSE становится точно 17, MAE=4, R²=null. Это проверяет подключение test
+ветки, а не только способность estimator вернуть модель.
+Model output новых estimator-нод читается общим Predict; прямой отчёт по
+коэффициентам/feature importance для них пока не реализован.
+
+Opt-in команда: `cargo test --offline --locked -p datacraft-desktop --features
+spark-integration-tests regression_metrics_run_button -- --test-threads=1`.
+Это egui adapter, принимающий mouse events и запускающий настоящий worker;
+ручной Run в настоящем окне для новых estimator-нод отдельно — NOT_RUN.
+Native startup проверен отдельно. CI дополнен обоими Run-button сценариями;
+новый удалённый Actions run не запускался.
+
+Fallback Scala build использует уже установленные compiler/runtime/MUnit jars
+и аргументы JVM из build.sbt, как в предыдущем разделе. Собраны шесть production
+.class, они скопированы только в локальный workspace target; обычный classpath
+подтверждён CLI. Это не успешный sbt run. Новых dependencies не добавлено;
+на свежем checkout используйте штатный `sbt test writeClasspath`.
+
+Первоначальные FAIL исправлены: неоднозначный Scala .toMap.apply в тесте,
+Clippy match-like-matches-macro и сравнение JSON integer/float токенов в UI-тесте.
+Для результата явно задаётся value: Double schema и проверяется численное
+значение независимо от лексического представления JSON (0 либо 0.0).
+Preview восстанавливает пропущенные Spark JSON null cells по top-level schema;
+это проверено на неопределённом R². После исправлений suite прошли повторно.
+
+Логи (ignored): `.tools/regression-{ci,scala,fixtures,cli-metrics,cli-preview,
+ui-spark,clippy-features,native,sbt}.log`. Compiler/JUnit argument files находятся
+в `.tools/preprocessing/`. Границы: новые ноды на Linux/macOS, независимое
+review и полный `ci --with-spark` через sbt — NOT_RUN; прежний Job lifecycle
+в этой итерации отдельно не повторялся.
+ASSUMPTION: threshold 1e-6 для GLM и Linear Regression остаётся provisional,
+не solver error bound. Для Tree/RF fixtures и точного residual oracle допуск 0.
+Ни seed, ни эти тесты не доказывают общую численную эквивалентность старым нодам.
+
+## Подготовка данных и признаков: 15 типов нод
+
+verified 2026-11-08 via локальные команды Windows/MSVC, Rust 1.99.1,
+JDK 21.0.13, Scala 2.13.16, Spark 4.0.1, MUnit 1.0.4/JUnit 4.13.2.
+Добавлены JSON Source (NDJSON), Train/Test Split, Make Design Matrix,
+Index Categoricals, Reference Code Categoricals, Transform. Подробный контракт
+и происхождение ожидаемых значений: [PREPROCESSING.md](PREPROCESSING.md).
+
+| Проверка | Фактический результат |
+|---|---|
+| cargo xtask --offline ci | PASS: fmt/check/tests/Clippy, layers, commands, nodes |
+| cargo test --workspace --locked (offline, внутри ci) | PASS: 98 тестов; один subprocess fixture ignored, вызывается родительским тестом |
+| cargo xtask fixtures | PASS: шесть проектов, схемы и scalar values соответствуют независимому oracle |
+| Scala main + tests, прямой компилятор и JUnitCore | PASS: 17 настоящих MUnit-тестов, включая прежние шесть |
+| CLI run reference_code.dcraft | PASS: known a→[1,0], unseen c→[0,0], числовой x объединён с вектором |
+| CLI run train_test.dcraft | PASS: test preview, в данном запуске 32 строки из 128 |
+| CLI inspect features.jsonl --rows 2 | PASS: две строки, JSON schema с long/string |
+| CLI run index_categoricals.dcraft, обычный target/classpath.txt | PASS: id=5/a/0, id=6/c/2 |
+| Desktop train_test.dcraft --smoke-frames 4 | PASS: настоящий native startup, project loaded, exit 0 |
+| Job lifecycle | PASS: cancel после JVM cleanup, recovery и обнаружение stale result |
+| validate_generated.py и git diff --check | PASS: ошибок артефактов/whitespace нет |
+
+Архитектурные проверки нашли 18 command IDs и 15 node definitions. Desktop-тест
+открывает все четыре новых проекта, создаёт инспекторы каждого узла и проверяет
+видимые train/test порты без запуска Java; JSON Browse включён в adapter-тест.
+Ручное выполнение новых графов кнопками в настоящем окне — NOT_RUN;
+native startup и headless UI adapter проверены отдельно.
+
+Scala-проверки включают disjoint/exhaustive/grouped split, null-key grouping,
+инвариантность к repartition/order, изменение seed; train-only vocabulary,
+unknown/null bucket, точные sparse/dense 0/1 vectors, RFormula order/metadata,
+unlabeled Transform, numeric+vector assembly. Ошибки неизвестной категории,
+пустого fit, malformed formula/NDJSON, collisions и неправильного типа модели
+возвращаются recoverably; после ошибки проверен следующий успешный запрос.
+Spark ERROR в логах намеренно невалидных данных не означает падение тестового suite.
+
+`sbt test writeClasspath` — FAIL до компиляции: sandbox не даёт создать/открыть
+`AppData/Local/sbt/boot/sbt.boot.lock`. Права и глобальные настройки не менялись.
+Для фактической проверки использован установленный Scala compiler 2.13.16
+(`scala.tools.nsc.Main`) с Maven jars из уже заполненного Coursier cache;
+MUnit запущен через `org.junit.runner.JUnitCore` с теми же JVM add-opens/Xmx2g,
+что в build.sbt. Main/test classes собраны в `.tools/preprocessing/`;
+проверенные четыре production .class скопированы в локальный workspace target.
+Первый fixtures-прогон использовал DATACRAFT_WORKER_CLASSPATH на этот build;
+обычный classpath затем проверен отдельным CLI-запуском. Это не успешный sbt run.
+На свежем checkout остаётся штатная команда `sbt test writeClasspath`.
+
+Первоначальные FAIL исправлены: шесть строк не гарантируют непустой test,
+поэтому split-пример использует 128 строк; round-trip тест учитывает каноническую
+сортировку рёбер; preflight-тест явно конфигурирует worker; UI assertion использует
+постоянные port IDs train/test. После исправлений соответствующие suite прошли.
+
+Логи (ignored): `.tools/preprocessing-{ci,scala,fixtures,reference_code,train_test,
+inspect,default-classpath,native,lifecycle,sbt}.log`; аргументы compiler/JUnit
+сохранены в `.tools/preprocessing/*.args`. Новых Maven/Cargo зависимостей для
+preprocessing не добавлено. Rfd относится к предыдущему пакету диалогов ниже.
+
+NOT_RUN: новый удалённый Actions run, новые ноды на Linux/macOS, независимое
+review, полный запуск `ci --with-spark` через sbt в этой sandbox.
+ASSUMPTION: старый ML threshold 1e-6 остаётся provisional acceptance contract,
+не solver error bound. Для новых индексов/векторов и scalar design fixtures
+допуск нулевой. Split не обещает точную долю или неизменный hash между версиями
+Spark; fit не имеет общей гарантии bounded RAM. Модели пока не сохраняются.
+
+## Системные диалоги и Rename
+
+verified 2026-11-08 via локальные команды Windows/MSVC, Rust 1.99.1,
+eframe/egui 0.33.3, rfd 0.18.0, JDK 21.0.13:
+
+- Добавлен rfd 0.18.0 (MIT, MSRV 1.92). API/default features проверены по
+  исходникам опубликованного tag; настоящий Cargo обновил Cargo.lock.
+  Первый fetch в агентской сессии — FAIL из-за недоступного index.crates.io;
+  пользователь выполнил fetch, дальнейшие сборки — --locked --offline.
+- `cargo xtask ci --offline` — PASS: fmt/check/test/Clippy, layers, 18 commands,
+  9 nodes. Workspace: 93 теста; одна ignored-функция по-прежнему запускается
+  как subprocess fixture тестом отмены процесса.
+- Desktop: 24 обычных теста, включая pending/ready/cancel native future model,
+  запрет второго picker, Open с защитой неприменённого буфера, отмену всех видов
+  picker без изменения проекта/буфера/истории, stale revision/UUID, Browse
+  CSV/Parquet только в буфер, Save as с Unicode именем и rebasing, защиту
+  future-version файла, Save and close нового проекта с отменой, Rename,
+  Undo/Redo, пустое имя, no-op, запрет закрытия родителя при открытом picker.
+  Ответы selector в этих adapter-тестах подаются явно, ОС-диалоги они не открывают.
+- Дополнительный opt-in Spark UI-тест — PASS, два настоящих JVM jobs:
+  исходные (4,11)/(5,13)/(6,15), затем ответ selector с абсолютным Unicode-путём
+  к реальной копии CSV, Apply, Filter quantity>=5 и повторный Run:
+  (5,13)/(6,15)/(7,17). Unicode + пробелы прошли через Rust/JSON/JVM/Spark.
+  Этот тест не входит в обычные 93. Сам selector здесь также инъецирован.
+- Clippy desktop с feature spark-integration-tests — PASS.
+- Нативное окно с новым toolbar отрисовано; screenshot Glow backend просмотрен:
+  `.tools/file-dialog-window.png` (ignored).
+- Настоящие Windows Open и Save as — PASS на открытие/отмену: inline PowerShell
+  с Win32-сообщениями только HWND запущенного тестового PID нашёл окна
+  Open DataCraft project / Save DataCraft project as, закрыл каждый через Cancel,
+  затем DataCraft завершился с exit 0. Никакие файлы в этом native smoke не
+  выбирались и не сохранялись. Попытка запуска сохранённого .ps1 helper сначала
+  дала FAIL до исполнения из-за ExecutionPolicy; настройки не менялись, проверка
+  выполнена обычными inline-командами. Вывод сохранён в истории вызова инструмента.
+- Scala worker не менялся; sbt tests, четыре fixtures и job_lifecycle отдельно
+  повторно — NOT_RUN. Свежая проверка реального backend в этой итерации — UI-тест.
+- Ранее проверенный [Actions 7a7d60f](https://github.com/alexander1221/DataCraft/actions/runs/42485500996)
+  прошёл целиком, включая Linux native window под Xvfb. Новые rfd picker на
+  Linux/macOS, новый удалённый workflow и независимое review этой итерации — NOT_RUN.
+
+Логи: `.tools/file-dialog-ci.log`, `file-dialog-tests.log`, `file-dialog-spark.log`,
+`file-dialog-build.log`, `file-dialog-native.log`, `file-dialog-clippy-spark.log`.
+Нативный выбор конкретного файла и весь ручной сценарий Save as/Browse/close
+ещё требуют приёмки; открытие и отмена Windows popup проверены отдельно выше.
+Переименование не меняет имя файла. Native Source выбирает абсолютный путь;
+для переносимого проекта пользователь может ввести относительный путь вручную.
+Roadmap переставлен: следующий пакет — подготовка данных/признаков Spark,
+дальнейшая полировка GUI не является предварительным условием.
+ASSUMPTION: прежний ML threshold 1e-6 не изменён, solver error bound не обоснован.
+
 ## GitHub Actions для 65bf9b0: Linux GUI prerequisite
 
 verified 2026-11-08 via GitHub Actions API, jobs/steps и лог rust job:

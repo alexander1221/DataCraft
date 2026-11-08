@@ -108,7 +108,9 @@ impl Project {
         let mut resolved = self.clone();
         for node in &mut resolved.graph.nodes {
             let path = match &mut node.config {
-                NodeKind::CsvSource { path, .. } | NodeKind::ParquetSource { path } => path,
+                NodeKind::CsvSource { path, .. }
+                | NodeKind::ParquetSource { path }
+                | NodeKind::JsonSource { path } => path,
                 _ => continue,
             };
             // Preserve unfinished source values. Only a selected ready branch

@@ -67,6 +67,9 @@ pub enum ParameterRule {
     UniqueItems,
     IntegerRange { min: u32, max: u32 },
     NumberRange { min: f64, max: Option<f64> },
+    OpenNumberRange { min: f64, max: f64 },
+    OneOf { values: &'static [&'static str] },
+    GlmLink { family_parameter: &'static str },
     DifferentFrom { parameter: &'static str },
     NotInList { parameter: &'static str },
 }
@@ -174,7 +177,32 @@ impl NodeSpec {
                 ParameterRule::NumberRange { min, max } => value
                     .as_f64()
                     .is_some_and(|v| v >= *min && max.is_none_or(|m| v <= m)),
+                ParameterRule::OpenNumberRange { min, max } => {
+                    value.as_f64().is_some_and(|v| v > *min && v < *max)
+                }
                 ParameterRule::DifferentFrom { parameter } => all.get(*parameter) != Some(value),
+                ParameterRule::OneOf { values } => {
+                    value.as_str().is_some_and(|s| values.contains(&s))
+                }
+                ParameterRule::GlmLink { family_parameter } => {
+                    let family = all.get(*family_parameter).and_then(Value::as_str);
+                    matches!(
+                        (family, value.as_str()),
+                        (
+                            Some("gaussian"),
+                            Some("default" | "identity" | "log" | "inverse")
+                        ) | (
+                            Some("binomial"),
+                            Some("default" | "logit" | "probit" | "cloglog")
+                        ) | (
+                            Some("poisson"),
+                            Some("default" | "log" | "identity" | "sqrt")
+                        ) | (
+                            Some("gamma"),
+                            Some("default" | "inverse" | "identity" | "log")
+                        )
+                    )
+                }
                 ParameterRule::NotInList { parameter } => !all
                     .get(*parameter)
                     .and_then(Value::as_array)
@@ -304,6 +332,124 @@ pub(crate) const PARQUET: NodeSpec = NodeSpec {
     outputs: TABLE_OUTPUT,
     parameters: &[PATH],
     selectable_output: false,
+};
+pub(crate) const JSON: NodeSpec = NodeSpec {
+    id: "json_source",
+    label: "JSON Source",
+    ..PARQUET
+};
+const FIT_OUTPUTS: &[PortSpec] = &[TABLE_OUTPUT[0], MODEL_OUTPUT[0]];
+const KEEP_UNKNOWN: ParameterSpec = ParameterSpec {
+    name: "keep_unknown",
+    label: "Keep unknown categories",
+    parameter_type: ParameterType::Boolean,
+    default: Some(DefaultValue::Boolean(false)),
+    rules: &[],
+};
+pub(crate) const SPLIT: NodeSpec = NodeSpec {
+    id: "train_test_split",
+    label: "Train/Test Split",
+    category: NodeCategory::Transform,
+    inputs: TABLE,
+    outputs: &[
+        PortSpec {
+            id: "train",
+            label: "Train",
+            ..TABLE_OUTPUT[0]
+        },
+        PortSpec {
+            id: "test",
+            label: "Test",
+            ..TABLE_OUTPUT[0]
+        },
+    ],
+    selectable_output: false,
+    parameters: &[
+        ParameterSpec {
+            name: "key_columns",
+            label: "Split key columns (stable IDs)",
+            ..COLUMN_SELECTION
+        },
+        ParameterSpec {
+            name: "train_fraction",
+            label: "Train fraction",
+            parameter_type: ParameterType::Float,
+            default: Some(DefaultValue::Float(0.8)),
+            rules: &[ParameterRule::OpenNumberRange { min: 0.0, max: 1.0 }],
+        },
+        ParameterSpec {
+            name: "seed",
+            label: "Seed",
+            parameter_type: ParameterType::UnsignedInteger,
+            default: Some(DefaultValue::UnsignedInteger(42)),
+            rules: &[],
+        },
+    ],
+};
+pub(crate) const INDEX: NodeSpec = NodeSpec {
+    id: "index_categoricals",
+    label: "Index Categoricals",
+    category: NodeCategory::MachineLearning,
+    inputs: TABLE,
+    outputs: FIT_OUTPUTS,
+    selectable_output: false,
+    parameters: &[
+        COLUMN_SELECTION,
+        ParameterSpec {
+            default: Some(DefaultValue::Boolean(true)),
+            ..KEEP_UNKNOWN
+        },
+    ],
+};
+pub(crate) const REFERENCE: NodeSpec = NodeSpec {
+    id: "reference_code_categoricals",
+    label: "Reference Code Categoricals",
+    parameters: &[
+        COLUMN_SELECTION,
+        KEEP_UNKNOWN,
+        ParameterSpec {
+            name: "drop_last",
+            label: "Drop last category",
+            parameter_type: ParameterType::Boolean,
+            default: Some(DefaultValue::Boolean(true)),
+            rules: &[],
+        },
+    ],
+    ..INDEX
+};
+pub(crate) const DESIGN: NodeSpec = NodeSpec {
+    id: "make_design_matrix",
+    label: "Make Design Matrix",
+    parameters: &[
+        ParameterSpec {
+            name: "formula",
+            label: "R formula",
+            parameter_type: ParameterType::String,
+            default: None,
+            rules: NONEMPTY,
+        },
+        ParameterSpec {
+            name: "features_column",
+            label: "Features column",
+            parameter_type: ParameterType::String,
+            default: Some(DefaultValue::String("features")),
+            rules: &[
+                ParameterRule::NonEmpty,
+                ParameterRule::DifferentFrom {
+                    parameter: "label_column",
+                },
+            ],
+        },
+        ParameterSpec {
+            name: "label_column",
+            label: "Label column",
+            parameter_type: ParameterType::String,
+            default: Some(DefaultValue::String("label")),
+            rules: NONEMPTY,
+        },
+        KEEP_UNKNOWN,
+    ],
+    ..INDEX
 };
 pub(crate) const FILTER: NodeSpec = NodeSpec {
     id: "filter",
@@ -436,6 +582,231 @@ pub(crate) const REGRESSION: NodeSpec = NodeSpec {
         },
     ],
 };
+pub(crate) const GLM: NodeSpec = NodeSpec {
+    id: "generalized_linear_regression",
+    label: "Generalized Linear Regression",
+    selectable_output: false,
+    parameters: &[
+        REGRESSION.parameters[0],
+        REGRESSION.parameters[1],
+        ParameterSpec {
+            name: "family",
+            label: "Family",
+            parameter_type: ParameterType::String,
+            default: Some(DefaultValue::String("gaussian")),
+            rules: &[ParameterRule::OneOf {
+                values: &["gaussian", "binomial", "poisson", "gamma"],
+            }],
+        },
+        ParameterSpec {
+            name: "link",
+            label: "Link (default uses family default)",
+            parameter_type: ParameterType::String,
+            default: Some(DefaultValue::String("default")),
+            rules: &[ParameterRule::GlmLink {
+                family_parameter: "family",
+            }],
+        },
+        REGRESSION.parameters[2],
+        ParameterSpec {
+            default: Some(DefaultValue::UnsignedInteger(25)),
+            ..REGRESSION.parameters[3]
+        },
+        REGRESSION.parameters[4],
+    ],
+    ..REGRESSION
+};
+pub(crate) const TREE: NodeSpec = NodeSpec {
+    id: "decision_tree_regressor",
+    label: "Decision Tree Regressor",
+    selectable_output: false,
+    parameters: &[
+        REGRESSION.parameters[0],
+        REGRESSION.parameters[1],
+        ParameterSpec {
+            name: "max_depth",
+            label: "Maximum depth",
+            parameter_type: ParameterType::UnsignedInteger,
+            default: Some(DefaultValue::UnsignedInteger(5)),
+            rules: &[ParameterRule::IntegerRange { min: 0, max: 30 }],
+        },
+        ParameterSpec {
+            name: "max_bins",
+            label: "Maximum bins",
+            parameter_type: ParameterType::UnsignedInteger,
+            default: Some(DefaultValue::UnsignedInteger(32)),
+            rules: &[ParameterRule::IntegerRange {
+                min: 2,
+                max: i32::MAX as u32,
+            }],
+        },
+        ParameterSpec {
+            name: "min_instances_per_node",
+            label: "Minimum instances per node",
+            parameter_type: ParameterType::UnsignedInteger,
+            default: Some(DefaultValue::UnsignedInteger(1)),
+            rules: &[ParameterRule::IntegerRange {
+                min: 1,
+                max: i32::MAX as u32,
+            }],
+        },
+        SPLIT.parameters[2],
+    ],
+    ..REGRESSION
+};
+pub(crate) const FOREST: NodeSpec = NodeSpec {
+    id: "random_forest_regressor",
+    label: "Random Forest Regressor",
+    parameters: &[
+        TREE.parameters[0],
+        TREE.parameters[1],
+        TREE.parameters[2],
+        TREE.parameters[3],
+        TREE.parameters[4],
+        TREE.parameters[5],
+        ParameterSpec {
+            name: "num_trees",
+            label: "Number of trees",
+            parameter_type: ParameterType::UnsignedInteger,
+            default: Some(DefaultValue::UnsignedInteger(20)),
+            rules: &[ParameterRule::IntegerRange {
+                min: 1,
+                max: i32::MAX as u32,
+            }],
+        },
+        ParameterSpec {
+            name: "bootstrap",
+            label: "Bootstrap",
+            parameter_type: ParameterType::Boolean,
+            default: Some(DefaultValue::Boolean(true)),
+            rules: &[],
+        },
+        ParameterSpec {
+            name: "feature_subset_strategy",
+            label: "Feature subset strategy",
+            parameter_type: ParameterType::String,
+            default: Some(DefaultValue::String("auto")),
+            rules: &[ParameterRule::OneOf {
+                values: &["auto", "all", "sqrt", "log2", "onethird"],
+            }],
+        },
+    ],
+    ..TREE
+};
+pub(crate) const METRICS: NodeSpec = NodeSpec {
+    id: "regression_metrics",
+    label: "Regression Metrics",
+    category: NodeCategory::Output,
+    inputs: TABLE,
+    outputs: &[],
+    selectable_output: true,
+    parameters: &[
+        ParameterSpec {
+            rules: &[
+                ParameterRule::NonEmpty,
+                ParameterRule::DifferentFrom {
+                    parameter: "prediction_column",
+                },
+            ],
+            ..REGRESSION.parameters[0]
+        },
+        ParameterSpec {
+            name: "prediction_column",
+            label: "Prediction column",
+            parameter_type: ParameterType::String,
+            default: Some(DefaultValue::String("prediction")),
+            rules: NONEMPTY,
+        },
+    ],
+};
+pub(crate) const LOGISTIC: NodeSpec = NodeSpec {
+    id: "logistic_regression",
+    label: "Logistic Regression",
+    selectable_output: false,
+    parameters: &[
+        REGRESSION.parameters[0],
+        REGRESSION.parameters[1],
+        REGRESSION.parameters[2],
+        REGRESSION.parameters[3],
+        REGRESSION.parameters[4],
+        REGRESSION.parameters[5],
+        ParameterSpec {
+            name: "threshold",
+            label: "Probability threshold (class 1)",
+            parameter_type: ParameterType::Float,
+            default: Some(DefaultValue::Float(0.5)),
+            rules: &[ParameterRule::NumberRange {
+                min: 0.0,
+                max: Some(1.0),
+            }],
+        },
+    ],
+    ..REGRESSION
+};
+pub(crate) const SVC: NodeSpec = NodeSpec {
+    id: "linear_svc",
+    label: "Linear SVM",
+    parameters: &[
+        REGRESSION.parameters[0],
+        REGRESSION.parameters[1],
+        REGRESSION.parameters[2],
+        REGRESSION.parameters[3],
+        REGRESSION.parameters[4],
+        ParameterSpec {
+            name: "threshold",
+            label: "Raw margin threshold",
+            parameter_type: ParameterType::Float,
+            default: Some(DefaultValue::Float(0.0)),
+            rules: &[],
+        },
+    ],
+    ..LOGISTIC
+};
+const IMPURITY: ParameterSpec = ParameterSpec {
+    name: "impurity",
+    label: "Impurity",
+    parameter_type: ParameterType::String,
+    default: Some(DefaultValue::String("gini")),
+    rules: &[ParameterRule::OneOf {
+        values: &["gini", "entropy"],
+    }],
+};
+pub(crate) const CLASSIFIER_TREE: NodeSpec = NodeSpec {
+    id: "decision_tree_classifier",
+    label: "Decision Tree Classifier",
+    parameters: &[
+        TREE.parameters[0],
+        TREE.parameters[1],
+        TREE.parameters[2],
+        TREE.parameters[3],
+        TREE.parameters[4],
+        TREE.parameters[5],
+        IMPURITY,
+    ],
+    ..TREE
+};
+pub(crate) const CLASSIFIER_FOREST: NodeSpec = NodeSpec {
+    id: "random_forest_classifier",
+    label: "Random Forest Classifier",
+    parameters: &[
+        FOREST.parameters[0],
+        FOREST.parameters[1],
+        FOREST.parameters[2],
+        FOREST.parameters[3],
+        FOREST.parameters[4],
+        FOREST.parameters[5],
+        FOREST.parameters[6],
+        FOREST.parameters[7],
+        FOREST.parameters[8],
+        IMPURITY,
+    ],
+    ..FOREST
+};
+pub(crate) const CLASSIFIER_METRICS: NodeSpec = NodeSpec {
+    id: "classification_metrics",
+    label: "Classification Metrics",
+    ..METRICS
+};
 pub(crate) const PREDICT: NodeSpec = NodeSpec {
     id: "predict",
     label: "Predict",
@@ -444,6 +815,11 @@ pub(crate) const PREDICT: NodeSpec = NodeSpec {
     outputs: TABLE_OUTPUT,
     parameters: &[],
     selectable_output: false,
+};
+pub(crate) const TRANSFORM: NodeSpec = NodeSpec {
+    id: "transform",
+    label: "Transform",
+    ..PREDICT
 };
 pub(crate) const PREVIEW: NodeSpec = NodeSpec {
     id: "table_preview",
@@ -468,11 +844,26 @@ pub fn builtin_nodes() -> &'static [&'static NodeSpec] {
     &[
         &CSV,
         &PARQUET,
+        &JSON,
+        &SPLIT,
+        &DESIGN,
+        &INDEX,
+        &REFERENCE,
+        &TRANSFORM,
         &FILTER,
         &SELECT,
         &LIMIT,
         &ASSEMBLE,
         &REGRESSION,
+        &GLM,
+        &TREE,
+        &FOREST,
+        &METRICS,
+        &LOGISTIC,
+        &SVC,
+        &CLASSIFIER_TREE,
+        &CLASSIFIER_FOREST,
+        &CLASSIFIER_METRICS,
         &PREDICT,
         &PREVIEW,
     ]
@@ -549,10 +940,30 @@ pub fn validate_specs(specs: &[&NodeSpec]) -> Result<(), RegistryError> {
                             && min.is_finite()
                             && max.is_none_or(|v| v.is_finite() && v >= *min)
                     }
+                    ParameterRule::OpenNumberRange { min, max } => {
+                        p.parameter_type == ParameterType::Float
+                            && min.is_finite()
+                            && max.is_finite()
+                            && min < max
+                    }
                     ParameterRule::DifferentFrom { parameter } => {
                         *parameter != p.name
                             && spec.parameters.iter().any(|other| {
                                 other.name == *parameter && other.parameter_type == p.parameter_type
+                            })
+                    }
+                    ParameterRule::OneOf { values } => {
+                        p.parameter_type == ParameterType::String
+                            && !values.is_empty()
+                            && values.iter().all(|s| !s.trim().is_empty())
+                            && values.iter().collect::<BTreeSet<_>>().len() == values.len()
+                    }
+                    ParameterRule::GlmLink { family_parameter } => {
+                        p.parameter_type == ParameterType::String
+                            && *family_parameter != p.name
+                            && spec.parameters.iter().any(|other| {
+                                other.name == *family_parameter
+                                    && other.parameter_type == ParameterType::String
                             })
                     }
                     ParameterRule::NotInList { parameter } => {

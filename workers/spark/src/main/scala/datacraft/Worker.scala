@@ -4,11 +4,12 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.util.UUID
 import org.apache.spark.ml.feature.VectorAssembler
+import org.apache.spark.ml.Transformer
 import org.apache.spark.ml.linalg.SQLDataTypes
-import org.apache.spark.ml.regression.{LinearRegression, LinearRegressionModel}
-import org.apache.spark.sql.{DataFrame, SparkSession}
+import org.apache.spark.ml.regression.LinearRegression
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 import org.apache.spark.sql.functions.col
-import org.apache.spark.sql.types.NumericType
+import org.apache.spark.sql.types.{DoubleType, NumericType, StringType, StructType}
 import scala.collection.mutable
 import scala.util.control.NonFatal
 import ujson.{Arr, Null, Num, Obj, Str, Value}
@@ -79,7 +80,13 @@ object Worker {
     require(rows >= 1 && rows <= MaxPreviewRows, "Preview rows must be between 1 and 1000")
     // Both row and total response byte limits apply. Wide values can still be expensive in Spark.
     val bounded = df.limit(rows)
-    val values = bounded.toJSON.collect().map(ujson.read(_))
+    val fields = df.schema.fieldNames
+    val values = bounded.toJSON.collect().map { json =>
+      val row = ujson.read(json)
+      // Spark's JSON generator omits null fields by default; preserve table cells.
+      fields.foreach(name => if (!row.obj.contains(name)) row(name) = Null)
+      row
+    }
     Obj("name" -> name, "schema" -> ujson.read(df.schema.json), "rows" -> Arr.from(values))
   }
 
@@ -108,17 +115,25 @@ object Worker {
       val output = request("output_node").str
       require(order.nonEmpty && order.last == output && order.distinct.size == order.size,
         "Invalid execution order")
-      val tables = mutable.Map.empty[String, DataFrame]
-      val models = mutable.Map.empty[String, LinearRegressionModel]
+      val tables = mutable.Map.empty[(String, String), DataFrame]
+      val models = mutable.Map.empty[String, Transformer]
       var results = Vector.empty[Value]
 
-      def upstream(node: String, port: String): String = {
+      def upstreamEdge(node: String, port: String): Value = {
         val matches = edges.filter(e => e("to").str == node && e("to_port").str == port)
         require(matches.size == 1, s"Expected exactly one input: $node:$port")
-        matches.head("from").str
+        matches.head
       }
-      def input(node: String): DataFrame = tables.getOrElse(upstream(node, "table"),
-        throw new IllegalArgumentException(s"Missing table dependency for $node"))
+      def input(node: String): DataFrame = {
+        val edge = upstreamEdge(node, "table")
+        tables.getOrElse((edge("from").str, edge("from_port").str),
+          throw new IllegalArgumentException(s"Missing table dependency for $node"))
+      }
+      def table(node: String, df: DataFrame): Unit = { tables((node, "table")) = df }
+      def fitted(node: String, model: Transformer, training: DataFrame): Unit = {
+        models(node) = model
+        table(node, model.transform(training))
+      }
 
       spark.sparkContext.setJobGroup(id.str, "DataCraft execution", interruptOnCancel = true)
       order.foreach { node =>
@@ -127,30 +142,50 @@ object Worker {
         config("kind").str match {
           case "csv_source" =>
             val path = localPath(config("path").str)
-            tables(node) = spark.read.option("header", config("header").bool)
+            table(node, spark.read.option("header", config("header").bool)
               .option("inferSchema", config("infer_schema").bool)
-              .option("mode", "FAILFAST").csv(path.toString)
+              .option("mode", "FAILFAST").csv(path.toString))
           case "parquet_source" =>
-            tables(node) = spark.read.parquet(localPath(config("path").str).toString)
-          case "filter" => tables(node) = input(node).filter(config("expression").str)
+            table(node, spark.read.parquet(localPath(config("path").str).toString))
+          case "json_source" =>
+            table(node, spark.read.option("mode", "FAILFAST").json(localPath(config("path").str).toString))
+          case "train_test_split" =>
+            val seed = config("seed").num
+            require(seed.isFinite && seed == math.floor(seed), "Seed must be an integer")
+            val keys = config("key_columns").arr.map(_.str).toSeq
+            val (train, test) = FeaturePreparation.split(input(node), keys, config("train_fraction").num, seed.toLong)
+            tables((node, "train")) = train
+            tables((node, "test")) = test
+          case "index_categoricals" | "reference_code_categoricals" =>
+            val df = input(node)
+            val oneHot = config("kind").str == "reference_code_categoricals"
+            val model = FeaturePreparation.index(df, names(config), config("keep_unknown").bool,
+              oneHot, if (oneHot) config("drop_last").bool else false)
+            fitted(node, model, df)
+          case "make_design_matrix" =>
+            val df = input(node)
+            fitted(node, FeaturePreparation.design(df, config("formula").str, config("features_column").str,
+              config("label_column").str, config("keep_unknown").bool), df)
+          case "filter" => table(node, input(node).filter(config("expression").str))
           case "select_columns" =>
             val df = input(node)
             val columns = names(config)
             requireColumns(df, columns.toSeq)
-            tables(node) = df.select(columns.map(exactColumn): _*)
+            table(node, df.select(columns.toIndexedSeq.map(exactColumn): _*))
           case "limit" =>
             val rows = config("rows").num.toInt
             require(rows > 0, "Limit must be positive")
-            tables(node) = input(node).limit(rows)
+            table(node, input(node).limit(rows))
           case "assemble_features" =>
             val df = input(node)
             val columns = names(config)
             requireColumns(df, columns.toSeq)
-            columns.foreach(c => require(df.schema(c).dataType.isInstanceOf[NumericType], s"Non-numeric feature: $c"))
+            columns.foreach(c => require(df.schema(c).dataType.isInstanceOf[NumericType] || df.schema(c).dataType == SQLDataTypes.VectorType,
+              s"Feature must be numeric or an ML vector: $c"))
             val target = config("output_column").str
             require(target.trim.nonEmpty && !df.columns.contains(target), s"Output column already exists or is empty: $target")
-            tables(node) = new VectorAssembler().setInputCols(columns).setOutputCol(target)
-              .setHandleInvalid("error").transform(df)
+            table(node, new VectorAssembler().setInputCols(columns.map(FeaturePreparation.quoted)).setOutputCol(target)
+              .setHandleInvalid("error").transform(df))
           case "linear_regression" =>
             val df = input(node)
             val label = config("label_column").str
@@ -175,10 +210,34 @@ object Worker {
                   Seq(Str("r2"), finite(model.summary.r2))))
               )
             }
-          case "predict" =>
-            val model = models.getOrElse(upstream(node, "model"),
+          case "generalized_linear_regression" | "decision_tree_regressor" | "random_forest_regressor" =>
+            models(node) = RegressionSupport.fit(input(node), config)
+          case "logistic_regression" | "linear_svc" | "decision_tree_classifier" | "random_forest_classifier" =>
+            models(node) = ClassificationSupport.fit(input(node), config)
+          case "classification_metrics" =>
+            require(node == output, "Classification Metrics is only valid as selected output")
+            val metrics = ClassificationSupport.metrics(input(node), config("label_column").str, config("prediction_column").str)
+            import scala.jdk.CollectionConverters._
+            val schema = new StructType().add("metric", StringType, false).add("value", DoubleType, false)
+            results = Vector(preview("Classification metrics",
+              spark.createDataFrame(metrics.map { case (name, value) => Row(name, value) }.asJava, schema), MaxPreviewRows))
+          case "regression_metrics" =>
+            require(node == output, "Regression Metrics is only valid as selected output")
+            val metrics = RegressionSupport.metrics(input(node), config("label_column").str, config("prediction_column").str)
+            import scala.jdk.CollectionConverters._
+            val schema = new StructType().add("metric", StringType, false).add("value", DoubleType, true)
+            val rows = metrics.map { case (name, value) => Row(name, value.map(Double.box).orNull) }
+            results = Vector(preview("Regression metrics", spark.createDataFrame(rows.asJava, schema), MaxPreviewRows))
+          case "predict" | "transform" =>
+            val edge = upstreamEdge(node, "model")
+            require(edge("from_port").str == "model", "Expected a model output port")
+            val model = models.getOrElse(edge("from").str,
               throw new IllegalArgumentException("Missing model dependency"))
-            tables(node) = model.transform(input(node))
+            val prediction = config("kind").str == "predict"
+            require(prediction == (RegressionSupport.isRegression(model) || ClassificationSupport.isClassifier(model)),
+              if (prediction) "Predict requires a regression model or classifier; use Transform for preprocessing"
+              else "Transform requires a preprocessing model; use Predict for regression/classification")
+            table(node, model.transform(input(node)))
           case "table_preview" =>
             require(node == output, "Preview is only valid as selected output")
             results = Vector(preview("Preview", input(node), config("rows").num.toInt))

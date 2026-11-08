@@ -1,0 +1,12 @@
+{"id": 1, "x": -4, "target": 0}
+{"id": 2, "x": -3, "target": 0}
+{"id": 3, "x": -2, "target": 0}
+{"id": 4, "x": -1, "target": 0}
+{"id": 5, "x": 1, "target": 1}
+{"id": 6, "x": 2, "target": 1}
+{"id": 7, "x": 3, "target": 1}
+{"id": 8, "x": 4, "target": 1}
+{"id": 9, "x": -2.5, "target": 0}
+{"id": 10, "x": -0.5, "target": 0}
+{"id": 11, "x": 0.5, "target": 1}
+{"id": 12, "x": 2.5, "target": 1}

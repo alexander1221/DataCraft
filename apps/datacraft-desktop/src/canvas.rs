@@ -208,7 +208,13 @@ impl Canvas {
                         [a, a + egui::vec2(reach, 0.0), b - egui::vec2(reach, 0.0), b],
                         false,
                         Color32::TRANSPARENT,
-                        Stroke::new(2.0_f32, Color32::from_rgb(90, 155, 210)),
+                        Stroke::new(
+                            2.0_f32,
+                            match from_node.config.spec().outputs[out].data_type {
+                                PortType::Model => Color32::from_rgb(211, 163, 96),
+                                PortType::Table => Color32::from_rgb(90, 155, 210),
+                            },
+                        ),
                     ));
                 }
             }
@@ -349,7 +355,7 @@ impl Canvas {
     }
 }
 
-fn size(node: &Node) -> Vec2 {
+pub(crate) fn size(node: &Node) -> Vec2 {
     let spec = node.config.spec();
     egui::vec2(
         200.0,

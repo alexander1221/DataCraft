@@ -15,6 +15,96 @@ fn public_catalog_matches_persistent_contract_and_ports() {
     // Independent contract table, not a snapshot generated from the registry.
     let expected = [
         (
+            "logistic_regression",
+            vec![("table", PortType::Table)],
+            vec![("model", PortType::Model)],
+            false,
+        ),
+        (
+            "linear_svc",
+            vec![("table", PortType::Table)],
+            vec![("model", PortType::Model)],
+            false,
+        ),
+        (
+            "decision_tree_classifier",
+            vec![("table", PortType::Table)],
+            vec![("model", PortType::Model)],
+            false,
+        ),
+        (
+            "random_forest_classifier",
+            vec![("table", PortType::Table)],
+            vec![("model", PortType::Model)],
+            false,
+        ),
+        (
+            "classification_metrics",
+            vec![("table", PortType::Table)],
+            vec![],
+            true,
+        ),
+        (
+            "generalized_linear_regression",
+            vec![("table", PortType::Table)],
+            vec![("model", PortType::Model)],
+            false,
+        ),
+        (
+            "decision_tree_regressor",
+            vec![("table", PortType::Table)],
+            vec![("model", PortType::Model)],
+            false,
+        ),
+        (
+            "random_forest_regressor",
+            vec![("table", PortType::Table)],
+            vec![("model", PortType::Model)],
+            false,
+        ),
+        (
+            "regression_metrics",
+            vec![("table", PortType::Table)],
+            vec![],
+            true,
+        ),
+        (
+            "json_source",
+            vec![],
+            vec![("table", PortType::Table)],
+            false,
+        ),
+        (
+            "train_test_split",
+            vec![("table", PortType::Table)],
+            vec![("train", PortType::Table), ("test", PortType::Table)],
+            false,
+        ),
+        (
+            "make_design_matrix",
+            vec![("table", PortType::Table)],
+            vec![("table", PortType::Table), ("model", PortType::Model)],
+            false,
+        ),
+        (
+            "index_categoricals",
+            vec![("table", PortType::Table)],
+            vec![("table", PortType::Table), ("model", PortType::Model)],
+            false,
+        ),
+        (
+            "reference_code_categoricals",
+            vec![("table", PortType::Table)],
+            vec![("table", PortType::Table), ("model", PortType::Model)],
+            false,
+        ),
+        (
+            "transform",
+            vec![("table", PortType::Table), ("model", PortType::Model)],
+            vec![("table", PortType::Table)],
+            false,
+        ),
+        (
             "csv_source",
             vec![],
             vec![("table", PortType::Table)],
@@ -95,6 +185,77 @@ fn public_catalog_matches_persistent_contract_and_ports() {
 #[test]
 fn creation_defaults_and_typed_round_trip_cover_every_kind() {
     let cases = [
+        (
+            "json_source",
+            json!({"path":"data.jsonl"}),
+            json!({"kind":"json_source","path":"data.jsonl"}),
+        ),
+        (
+            "train_test_split",
+            json!({"key_columns":["id"]}),
+            json!({"kind":"train_test_split","key_columns":["id"],"seed":42,"train_fraction":0.8}),
+        ),
+        (
+            "index_categoricals",
+            json!({"columns":["region"]}),
+            json!({"kind":"index_categoricals","columns":["region"],"keep_unknown":true}),
+        ),
+        (
+            "reference_code_categoricals",
+            json!({"columns":["region"]}),
+            json!({"kind":"reference_code_categoricals","columns":["region"],"keep_unknown":false,"drop_last":true}),
+        ),
+        (
+            "make_design_matrix",
+            json!({"formula":"y ~ x"}),
+            json!({"kind":"make_design_matrix","formula":"y ~ x","features_column":"features","label_column":"label","keep_unknown":false}),
+        ),
+        ("transform", json!({}), json!({"kind":"transform"})),
+        (
+            "logistic_regression",
+            json!({"label_column":"y"}),
+            json!({"kind":"logistic_regression","label_column":"y","features_column":"features","fit_intercept":true,"max_iter":100,"reg_param":0.0,"elastic_net_param":0.0,"threshold":0.5}),
+        ),
+        (
+            "linear_svc",
+            json!({"label_column":"y"}),
+            json!({"kind":"linear_svc","label_column":"y","features_column":"features","fit_intercept":true,"max_iter":100,"reg_param":0.0,"threshold":0.0}),
+        ),
+        (
+            "decision_tree_classifier",
+            json!({"label_column":"y"}),
+            json!({"kind":"decision_tree_classifier","label_column":"y","features_column":"features","max_depth":5,"max_bins":32,"min_instances_per_node":1,"seed":42,"impurity":"gini"}),
+        ),
+        (
+            "random_forest_classifier",
+            json!({"label_column":"y"}),
+            json!({"kind":"random_forest_classifier","label_column":"y","features_column":"features","max_depth":5,"max_bins":32,"min_instances_per_node":1,"seed":42,"num_trees":20,"bootstrap":true,"feature_subset_strategy":"auto","impurity":"gini"}),
+        ),
+        (
+            "classification_metrics",
+            json!({"label_column":"y"}),
+            json!({"kind":"classification_metrics","label_column":"y","prediction_column":"prediction"}),
+        ),
+        (
+            "generalized_linear_regression",
+            json!({"label_column":"y"}),
+            json!({"kind":"generalized_linear_regression","label_column":"y","features_column":"features","family":"gaussian","link":"default","fit_intercept":true,"max_iter":25,"reg_param":0.0}),
+        ),
+        (
+            "decision_tree_regressor",
+            json!({"label_column":"y"}),
+            json!({"kind":"decision_tree_regressor","label_column":"y","features_column":"features","max_depth":5,"max_bins":32,"min_instances_per_node":1,"seed":42}),
+        ),
+        (
+            "random_forest_regressor",
+            json!({"label_column":"y"}),
+            json!({"kind":"random_forest_regressor","label_column":"y","features_column":"features","max_depth":5,"max_bins":32,"min_instances_per_node":1,"seed":42,"num_trees":20,"bootstrap":true,"feature_subset_strategy":"auto"}),
+        ),
+        (
+            "regression_metrics",
+            json!({"label_column":"y"}),
+            json!({"kind":"regression_metrics","label_column":"y","prediction_column":"prediction"}),
+        ),
         (
             "csv_source",
             json!({"path":"sales.csv"}),

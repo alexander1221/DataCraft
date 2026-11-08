@@ -84,6 +84,90 @@ class WorkerSuite extends munit.FunSuite {
     assert(!Worker.execute(spark, invalid)("ok").bool)
   }
 
+  test("JSON training-only categorical model transforms held-out and unseen categories") {
+    val result = Worker.execute(spark, request("index_categoricals.dcraft"))
+    assert(result("ok").bool, ujson.write(result))
+    assertEquals(result("tables")(0)("rows"), Arr(
+      Obj("id" -> 5, "category" -> "a", "category_idx" -> 0.0),
+      Obj("id" -> 6, "category" -> "c", "category_idx" -> 2.0)))
+    val strict = request("index_categoricals.dcraft")
+    strict("project")("nodes")(3)("config")("keep_unknown") = false
+    assert(!Worker.execute(spark, strict)("ok").bool)
+    val wrong = request("index_categoricals.dcraft")
+    wrong("project")("nodes")(4)("config")("kind") = "predict"
+    val error = Worker.execute(spark, wrong)
+    assert(!error("ok").bool)
+    assert(error("message").str.contains("Predict requires a regression model"))
+  }
+
+  test("malformed NDJSON returns a source error without poisoning the next request") {
+    val path = Files.createTempFile("datacraft-invalid-json-", ".jsonl")
+    try {
+      Files.writeString(path, "{invalid json\n")
+      val req = request("index_categoricals.dcraft")
+      req("project")("nodes")(0)("config")("path") = path.toString
+      val error = Worker.execute(spark, req)
+      assert(!error("ok").bool)
+      assertEquals(error("node"), req("project")("nodes")(0)("id"))
+      assert(Worker.execute(spark, request("index_categoricals.dcraft"))("ok").bool)
+    } finally Files.delete(path)
+  }
+
+  private def vector(value: Value): Seq[Double] = {
+    val values = value("values").arr.map(_.num).toSeq
+    if (value("type").num == 1) values
+    else {
+      val entries = value("indices").arr.map(_.num.toInt).zip(values).toMap
+      (0 until value("size").num.toInt).map(i => entries.getOrElse(i, 0.0))
+    }
+  }
+
+  test("one-hot reference coding and numeric-vector assembly execute through the protocol") {
+    val result = Worker.execute(spark, request("reference_code.dcraft"))
+    assert(result("ok").bool, ujson.write(result))
+    val rows = result("tables")(0)("rows").arr
+    assertEquals(rows.map(_("id").num).toSeq, Seq(5.0, 6.0))
+    assertEquals(vector(rows(0)("category_idx_vec")), Seq(1.0, 0.0))
+    assertEquals(vector(rows(1)("category_idx_vec")), Seq(0.0, 0.0))
+    assertEquals(vector(rows(0)("features")), Seq(5.0, 1.0, 0.0))
+    assertEquals(vector(rows(1)("features")), Seq(6.0, 0.0, 0.0))
+  }
+
+  test("RFormula fits training rows and reports recoverable invalid formula and empty fit") {
+    val result = Worker.execute(spark, request("design_matrix.dcraft"))
+    assert(result("ok").bool, ujson.write(result))
+    assertEquals(result("tables")(0)("rows"), Arr(
+      Obj("id" -> 5, "x" -> 5, "y" -> 13, "label" -> 13.0),
+      Obj("id" -> 6, "x" -> 6, "y" -> 15, "label" -> 15.0)))
+    val invalid = request("design_matrix.dcraft")
+    invalid("project")("nodes")(3)("config")("formula") = "y ~ ~ x"
+    val error = Worker.execute(spark, invalid)
+    assert(!error("ok").bool)
+    assertEquals(error("node"), invalid("project")("nodes")(3)("id"))
+    val empty = request("design_matrix.dcraft")
+    empty("project")("nodes")(1)("config")("expression") = "id < 0"
+    assert(!Worker.execute(spark, empty)("ok").bool)
+    val regression = request("prediction.dcraft")
+    regression("project")("nodes")(4)("config")("kind") = "transform"
+    assert(Worker.execute(spark, regression)("message").str.contains("Transform requires a preprocessing model"))
+  }
+
+  test("split output ports select distinct branches without leaking training rows") {
+    val req = request("train_test.dcraft")
+    val test = Worker.execute(spark, req)
+    assert(test("ok").bool, ujson.write(test))
+    val trainReq = request("train_test.dcraft")
+    val testEdge = trainReq("project")("edges").arr.find(_("from_port").str == "test").get
+    testEdge("from_port") = "train"
+    val train = Worker.execute(spark, trainReq)
+    assert(train("ok").bool, ujson.write(train))
+    def ids(result: Value) = result("tables")(0)("rows").arr.map(_("id").num.toInt).toSet
+    assert(ids(train).nonEmpty && ids(test).nonEmpty)
+    assertEquals(ids(train).intersect(ids(test)), Set.empty[Int])
+    assertEquals(ids(train) ++ ids(test), (1 to 128).toSet)
+    test("tables")(0)("rows").arr.foreach(row => assertEquals(vector(row("features")), Seq(row("x").num)))
+  }
+
   test("Parquet source executes with schema preserved") {
     val directory = Files.createTempDirectory("datacraft-parquet-")
     try {

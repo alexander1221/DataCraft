@@ -101,6 +101,9 @@ pub struct Session {
     redo: VecDeque<Project>,
     history_limit: usize,
     revision: u64,
+    computation_revision: u64,
+    pending_execution_revision: Option<(u64, u64)>,
+    result_computation_revision: Option<u64>,
     worker_config: Option<WorkerConfig>,
     pub(crate) jobs: JobManager,
     job_options: JobOptions,
@@ -123,6 +126,9 @@ impl Session {
             redo: VecDeque::new(),
             history_limit,
             revision: 0,
+            computation_revision: 0,
+            pending_execution_revision: None,
+            result_computation_revision: None,
             worker_config: None,
             jobs: JobManager::default(),
             job_options: JobOptions::default(),
@@ -135,6 +141,7 @@ impl Session {
         Ok(Self {
             project: Some(project),
             revision: 1,
+            computation_revision: 1,
             ..Self::new(history_limit)
         })
     }
@@ -162,7 +169,7 @@ impl Session {
     pub fn result_is_current(&self) -> bool {
         self.last_execution
             .as_ref()
-            .is_some_and(|r| r.project_revision == self.revision)
+            .is_some_and(|_| self.result_computation_revision == Some(self.computation_revision))
     }
     pub fn configure_worker(&mut self, config: WorkerConfig) {
         self.worker_config = Some(config);
@@ -187,7 +194,17 @@ impl Session {
     fn refresh_execution(&mut self) {
         if let Some(info) = self.jobs.current_info() {
             if let Ok(Some(record)) = self.jobs.result(info.id) {
-                self.last_execution = Some(record);
+                if !self
+                    .last_execution
+                    .as_ref()
+                    .is_some_and(|previous| Arc::ptr_eq(previous, &record))
+                {
+                    self.result_computation_revision = self
+                        .pending_execution_revision
+                        .filter(|(project, _)| *project == record.project_revision)
+                        .map(|(_, computation)| computation);
+                    self.last_execution = Some(record);
+                }
             }
         }
     }
@@ -271,10 +288,15 @@ impl Session {
             canonicalize(&mut candidate);
             if candidate != before {
                 let revision = self.next_revision()?;
+                let computation = self
+                    .computation_revision
+                    .checked_add(u64::from(!same_computation(&before, &candidate)))
+                    .ok_or(SessionError::RevisionExhausted)?;
                 Self::push_history(&mut self.undo, before, self.history_limit);
                 self.redo.clear();
                 self.project = Some(candidate);
                 self.revision = revision;
+                self.computation_revision = computation;
             }
             CommandPayload::None
         } else {
@@ -287,13 +309,19 @@ impl Session {
                     } else {
                         (&mut self.redo, &mut self.undo)
                     };
-                    let restored = from.pop_back().ok_or(SessionError::Disabled {
+                    let restored = from.back().ok_or(SessionError::Disabled {
                         command: id,
                         reason: "history is empty",
                     })?;
+                    let computation = self
+                        .computation_revision
+                        .checked_add(u64::from(!same_computation(&before, restored)))
+                        .ok_or(SessionError::RevisionExhausted)?;
+                    let restored = from.pop_back().ok_or(SessionError::InvalidBatch)?;
                     Self::push_history(to, before, self.history_limit);
                     self.project = Some(restored);
                     self.revision = revision;
+                    self.computation_revision = computation;
                     CommandPayload::None
                 }
                 Command::New { name, .. } => {
@@ -314,6 +342,9 @@ impl Session {
                     self.jobs = JobManager::default();
                     self.revision = revision;
                     events.push(SessionEvent::Created);
+                    self.computation_revision = revision;
+                    self.pending_execution_revision = None;
+                    self.result_computation_revision = None;
                     CommandPayload::Created
                 }
                 Command::Open { path, .. } => {
@@ -330,6 +361,9 @@ impl Session {
                     self.jobs = JobManager::default();
                     self.revision = revision;
                     events.push(SessionEvent::Opened { path: path.clone() });
+                    self.computation_revision = revision;
+                    self.pending_execution_revision = None;
+                    self.result_computation_revision = None;
                     CommandPayload::Opened { path }
                 }
                 Command::Save => {
@@ -347,7 +381,8 @@ impl Session {
                         for node in project.graph.nodes.iter().filter(|n| order.contains(&n.id)) {
                             let source = match &node.config {
                                 NodeKind::CsvSource { path, .. }
-                                | NodeKind::ParquetSource { path } => Some(path),
+                                | NodeKind::ParquetSource { path }
+                                | NodeKind::JsonSource { path } => Some(path),
                                 _ => None,
                             };
                             if source.is_some_and(|path| !Path::new(path).is_absolute()) {
@@ -367,6 +402,8 @@ impl Session {
                         config,
                         self.job_options,
                     )?;
+                    self.pending_execution_revision =
+                        Some((self.revision, self.computation_revision));
                     CommandPayload::JobStarted {
                         job_id: info.id,
                         project_revision: info.project_revision,
@@ -434,6 +471,17 @@ impl Session {
         events.push(SessionEvent::Saved { path: path.clone() });
         Ok(CommandPayload::Saved { path })
     }
+}
+
+fn same_computation(a: &Project, b: &Project) -> bool {
+    a.format_version == b.format_version
+        && a.output_node == b.output_node
+        && a.graph.edges == b.graph.edges
+        && a.graph.nodes.iter().map(|n| (&n.id, &n.config)).eq(b
+            .graph
+            .nodes
+            .iter()
+            .map(|n| (&n.id, &n.config)))
 }
 
 fn apply_edit(project: &mut Project, command: Command, depth: usize) -> Result<(), SessionError> {
@@ -527,7 +575,9 @@ fn rebase(project: &mut Project, old: &Path, new: &Path) {
     }
     for node in &mut project.graph.nodes {
         let path = match &mut node.config {
-            NodeKind::CsvSource { path, .. } | NodeKind::ParquetSource { path } => path,
+            NodeKind::CsvSource { path, .. }
+            | NodeKind::ParquetSource { path }
+            | NodeKind::JsonSource { path } => path,
             _ => continue,
         };
         if path.trim().is_empty() || path.contains("://") || Path::new(path).is_absolute() {
@@ -552,3 +602,7 @@ fn rebase(project: &mut Project, old: &Path, new: &Path) {
         *path = relative.to_string_lossy().into_owned();
     }
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod computation_tests;

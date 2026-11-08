@@ -4,10 +4,12 @@
 основание на Rust и локальный Scala worker с Apache Spark. Добавлен первый
 desktop-клиент на eframe/egui для просмотра графа и запуска preview.
 
-**Статус:** исходный код первой вертикали написан. Все шесть тестов Scala worker
-прошли с настоящим Spark на Windows/JDK 21 после исправления Parquet fixture.
-Rust fmt/check/test/Clippy прошли; CSV preview, обучение и предсказание
-проверены через связку Rust CLI → worker на Windows/JDK 21.
+**Статус:** работают визуальный редактор, подготовка признаков, регрессия и классификация.
+Проверены 108 Rust-тестов и 32 Scala/MUnit-теста с настоящим Spark на Windows/JDK 21.
+Rust fmt/check/Clippy и архитектурные проверки прошли; CSV/JSON preview,
+обучение, предсказание и fit/transform проверены через Rust CLI → worker.
+В текущей sandbox sbt заблокирован доступом к boot-кэшу; Scala скомпилирована
+установленным компилятором, тесты исполнены через JUnit. Обычная сборка ниже — sbt.
 Это ещё не готовый релиз.
 Полный список выполненных проверок — в [docs/VALIDATION.md](docs/VALIDATION.md).
 
@@ -15,7 +17,7 @@ Rust fmt/check/test/Clippy прошли; CSV preview, обучение и пре
 
 - UUID-идентификаторы нод, типизированные порты `Table` и `Model`, проверка DAG,
   обязательных входов, параметров, повторных соединений и ссылок.
-- Единый NodeSpec для девяти нод: порты/cardinality, параметры, defaults и
+- Единый NodeSpec для 24 нод: порты/cardinality, параметры, defaults и
   ограничения. Discovery через `datacraft nodes --json` без JVM.
 - JSON-проекты `.dcraft` версии 1 с координатами нод и относительными путями.
 - Сохранение черновиков с незаполненными параметрами/входами; диагностика
@@ -25,15 +27,28 @@ Rust fmt/check/test/Clippy прошли; CSV preview, обучение и пре
   открытия и исполнения; список контрактов доступен через `commands --json`.
 - Один фоновый job, Job ID, polling статуса/событий, отмена и timeout.
   Вычисления работают на snapshot проекта; редактирование остаётся доступным.
-- CSV, Parquet, Filter (Spark SQL expression), Select Columns, Limit, Table Preview.
-- Assemble Features для числовых колонок, Linear Regression, Predict.
+- CSV, Parquet, NDJSON, Filter (Spark SQL expression), Select Columns, Limit, Table Preview.
+- Train/Test Split с seed и стабильными ключами; RFormula Design Matrix,
+  Index Categoricals, Reference Code Categoricals и fitted Transform без повторного fit.
+- Assemble Features для чисел и ML-векторов, Linear Regression, Predict.
+- Generalized Linear Regression (gaussian/binomial/poisson/gamma), Decision Tree
+  Regressor и Random Forest Regressor; общий Predict для регрессионных моделей.
+- Regression Metrics: RMSE/MSE/MAE/R² на поданной таблице предсказаний.
+  Новые примеры оценивают test; при постоянном target R² возвращается как null.
+- Logistic Regression и Linear SVM для binary 0/1; Decision Tree Classifier и
+  Random Forest Classifier также для multiclass. Общий Predict принимает classifiers.
+- Classification Metrics: accuracy, weighted precision/recall/F1 на поданном наборе.
 - Таблицы коэффициентов и **обучающих** метрик RMSE/R². Это не оценка на test set.
 - CLI `validate`, `run`, `inspect`; ошибки приводят к ненулевому exit code.
 - `cargo xtask`: контроль зависимостей слоёв, реестров команд/нод и эталонных
   pipeline через настоящий Spark с проверкой схем и значений.
-- Desktop: New/Open/Save, палитра девяти типов нод, создание/удаление, canvas
+- Desktop: New/Open/Save, палитра 24 типов нод, создание/удаление, canvas
   со связями, выбор/перемещение, редактируемые параметры с Apply/Revert,
   Connect/Disconnect, Undo/Redo, Run/Cancel и таблица результатов.
+- Асинхронные системные Open/Save as, Browse для CSV/Parquet/JSON и переименование
+  проекта с Undo/Redo. Ручной ввод путей сохраняется.
+- Arrange разносит ветки графа одним Undo; Move/Rename сохраняют актуальность
+  результата. Примеры fit/transform имеют разнесённую раскладку.
 
 ## Требования и сборка
 
@@ -46,9 +61,12 @@ Spark 4.0.1 / Scala 2.13.16 подключаются через sbt; отдел�
 Остальные зависимости: serde 1, serde_json 1, uuid 1, thiserror 2, tempfile 3,
 clap 4; Scala JSON — ujson 4.2.1, тесты — MUnit 1.0.4. Точные разрешённые
 версии Rust-зависимостей зафиксированы в Cargo.lock.
-Desktop использует eframe/egui 0.33.3 с Glow, X11/Wayland backends; версия
+Desktop использует eframe/egui 0.33.3 с Glow, X11/Wayland backends и rfd 0.18.0
+(MIT, Rust 1.92+); версия
 выбрана по проверенному API. Дополнительная установка GUI-библиотек на Windows
-не потребовалась. Native запуск на других ОС этой итерацией не подтверждён.
+не потребовалась. Linux picker использует XDG Desktop Portal с GTK/GNOME/KDE
+backend либо Zenity и системный libdbus. Подробности и границы проверки —
+[FILE_DIALOGS.md](docs/FILE_DIALOGS.md), [VALIDATION.md](docs/VALIDATION.md).
 
 Следующие команды предназначены для подготовленного окружения. Какие именно
 проверки выполнены, указано в docs/VALIDATION.md:
@@ -66,6 +84,19 @@ cargo run -p datacraft-cli -- run examples/pipelines/draft.dcraft
 cargo run -p datacraft-cli -- run examples/pipelines/sample.dcraft
 cargo run -p datacraft-cli -- run examples/pipelines/regression.dcraft
 cargo run -p datacraft-cli -- run examples/pipelines/prediction.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/index_categoricals.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/reference_code.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/design_matrix.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/train_test.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/glm_regression.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/decision_tree.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/random_forest.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/random_forest.dcraft --output 00000000-0000-0000-0000-000000000009
+cargo run -p datacraft-cli -- run examples/pipelines/logistic_regression.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/linear_svc.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/decision_tree_classifier.dcraft
+cargo run -p datacraft-cli -- run examples/pipelines/random_forest_classifier.dcraft
+cargo run -p datacraft-cli -- inspect examples/data/features.jsonl --rows 5
 cargo run -p datacraft-cli -- inspect examples/data/sales.csv --rows 5
 cargo run -p datacraft-desktop -- examples/pipelines/sample.dcraft
 ```
@@ -123,7 +154,8 @@ cargo xtask ci --with-spark
 
 ## Ограничения
 
-- В desktop пути вводятся в строку; native file picker отсутствует.
+- На Linux системный picker требует desktop portal/backend либо Zenity;
+  при отсутствии выбора доступны Open path/Save path и ручное поле источника.
   Порты соединяются двумя нажатиями (выход → вход), drag-to-connect пока нет.
   Train/test split и категоризация пока отсутствуют.
 - Preview ограничен 1000 строками и ответом 8 MiB. Это не ограничение памяти
@@ -156,6 +188,7 @@ Session и команды: [docs/COMMANDS.md](docs/COMMANDS.md).
 Фоновые задания и отмена: [docs/EXECUTION.md](docs/EXECUTION.md).
 Первый desktop и управление canvas: [docs/DESKTOP.md](docs/DESKTOP.md).
 Редактор нод, параметров и связей: [docs/GRAPH_EDITOR.md](docs/GRAPH_EDITOR.md).
+Файловые диалоги и Rename: [docs/FILE_DIALOGS.md](docs/FILE_DIALOGS.md).
 Следующие этапы: [docs/ROADMAP.md](docs/ROADMAP.md).
 
 Правила участия и проверки перед PR: [CONTRIBUTING.md](CONTRIBUTING.md).

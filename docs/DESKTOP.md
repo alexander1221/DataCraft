@@ -22,13 +22,22 @@ cargo run -p datacraft-desktop -- --help
 cargo run -p datacraft-desktop -- examples/pipelines/sample.dcraft --smoke-frames 3
 ```
 
-Поле пути и Open открывают проект; Save/Save as сохраняют его через Session.
+Open… и Save as… открывают системные диалоги; Open path/Save path используют
+введённый путь. Save сохраняет текущий файл, а для нового проекта предлагает
+Save as. Browse… выбирает источник, Apply записывает его в граф. Rename project…
+меняет отображаемое имя через Session с Undo/Redo, не переименовывая файл.
+Детальный контракт: [FILE_DIALOGS.md](FILE_DIALOGS.md).
 New project начинает пустой граф. Кнопка типа в Nodes добавляет ноду, Delete node
 удаляет выбранную. Параметры изменяются через Apply/Revert. Для соединения нажмите
 выходной порт, затем входной; Disconnect находится в Connections инспектора.
 Escape/правая кнопка отменяют временный провод. Set project output назначает
-выбранный Preview или Linear Regression выходом проекта.
+выбранный Preview, Linear Regression report, Regression Metrics или Classification
+Metrics выходом проекта.
 Средняя кнопка перемещает canvas, колесо меняет масштаб, Fit показывает граф.
+Arrange под Nodes разносит DAG по слоям и веткам через один Batch Move с Undo.
+Open сохраняет геометрию пользователя. Примеры fit/transform уже разнесены;
+Model-связи золотые, Table-связи синие. Перемещение и Rename не делают результат
+устаревшим. Контракт и ограничения: [EDITOR_READABILITY.md](EDITOR_READABILITY.md).
 Нажатие ноды выбирает её, drag перемещает. Run selected запускает выбранный выход;
 Run project использует designated output. Cancel останавливает текущий JVM.
 
@@ -45,7 +54,9 @@ eframe/egui 0.33.3, backend Glow; версия фиксирована ради �
 ## §5. Реализация
 
 `apps/datacraft-desktop`: startup/CLI в main.rs, окно и Session adapter в lib.rs,
-геометрия canvas в canvas.rs, типизированный буфер параметров в editor.rs.
+геометрия canvas в canvas.rs, типизированный буфер параметров в editor.rs,
+асинхронные native requests/future в file_dialog.rs. Тесты UI adapter — tests.rs
+и tests/file_dialogs.rs; ответы picker в них подаются явно.
 Используются публичные API eframe tag 0.33.3
 ([App](https://github.com/emilk/egui/blob/0.33.3/crates/eframe/src/epi.rs)).
 MIT OR Apache-2.0 — лицензия выбранного eframe/egui. Сторонние code/assets
@@ -56,8 +67,8 @@ MIT OR Apache-2.0 — лицензия выбранного eframe/egui. Сто�
 
 Открытие/сохранение JSON синхронные; Spark работает в JobManager. Результаты
 ограничены движком, таблица прокручивается; схема читается из ответа worker.
-Нет native file picker,
-автосохранения и восстановления UI state. Путь вводится в строку окна.
+Нет автосохранения и восстановления UI state. Ручной путь остаётся альтернативой
+native picker; закрытие родителя с открытым picker отклоняется до его завершения.
 
 ## §7. Приёмка
 

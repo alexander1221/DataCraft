@@ -4,6 +4,42 @@ use std::{fs, path::Path};
 const SAMPLE: &str = include_str!("../../../examples/pipelines/sample.dcraft");
 
 #[test]
+fn preprocessing_examples_round_trip_and_resolve_json_paths() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/pipelines");
+    for name in [
+        "index_categoricals",
+        "reference_code",
+        "design_matrix",
+        "train_test",
+        "glm_regression",
+        "decision_tree",
+        "random_forest",
+        "logistic_regression",
+        "linear_svc",
+        "decision_tree_classifier",
+        "random_forest_classifier",
+    ] {
+        let path = root.join(format!("{name}.dcraft"));
+        let mut project = Project::load(&path).unwrap();
+        project.graph.edges.sort();
+        project.validate().unwrap();
+        assert_eq!(
+            Project::from_json(&project.to_json().unwrap()).unwrap(),
+            project
+        );
+        let resolved = project.resolved(&path).unwrap();
+        let datacraft_core::NodeKind::JsonSource { path: source } = &resolved.graph.nodes[0].config
+        else {
+            panic!("expected JSON source");
+        };
+        assert!(Path::new(source).is_absolute());
+        assert!(Path::new(source).is_file());
+        assert!(matches!(&project.graph.nodes[0].config,
+            datacraft_core::NodeKind::JsonSource { path } if Path::new(path).is_relative()));
+    }
+}
+
+#[test]
 fn round_trip_and_canonical_order() {
     let project = Project::from_json(SAMPLE).unwrap();
     let canonical = project.to_json().unwrap();

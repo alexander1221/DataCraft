@@ -32,7 +32,8 @@ Table и Model — существующие типы портов.
 
 ParameterSpec: name, label, тип, optional default и список ограничений.
 Без default значение требуется от вызывающего; пустое значение не считается
-отсутствующим и отдельно проверяется. Диапазоны включают обе границы.
+отсутствующим и отдельно проверяется. NumberRange включает обе границы;
+OpenNumberRange исключает их (train_fraction строго между 0 и 1).
 Строки проверяются на непустоту после trim, но сохраняются без нормализации.
 Списки колонок непустые, элементы непустые и уникальны при точном сравнении.
 Float обязан быть конечным; integer ограничивается типом u32 и заданным range.
@@ -42,18 +43,37 @@ Float обязан быть конечным; integer ограничиваетс
 |---|---|---|
 | csv_source | — → Table | header=true, infer_schema=true |
 | parquet_source | — → Table | — |
+| json_source | — → Table | path обязателен; NDJSON |
+| train_test_split | table → train, test (Table) | train_fraction=0.8, seed=42; key_columns обязательны |
+| make_design_matrix | table → table, model | features_column=features, label_column=label, keep_unknown=false; formula обязательна |
+| index_categoricals | table → table, model | keep_unknown=true; columns обязательны |
+| reference_code_categoricals | table → table, model | keep_unknown=false, drop_last=true; columns обязательны |
+| transform | table + model → table | fitted preprocessing, без повторного fit |
 | filter | Table → Table | — |
 | select_columns | Table → Table | — |
 | limit | Table → Table | rows=100 |
 | assemble_features | Table → Table | output_column=features |
 | linear_regression | Table → Model | features_column=features, fit_intercept=true, max_iter=100, reg_param=0, elastic_net_param=0 |
+| generalized_linear_regression | Table → Model | family=gaussian, link=default, features_column=features, fit_intercept=true, max_iter=25, reg_param=0 |
+| decision_tree_regressor | Table → Model | features_column=features, max_depth=5, max_bins=32, min_instances_per_node=1, seed=42 |
+| random_forest_regressor | Table → Model | как Tree; num_trees=20, bootstrap=true, feature_subset_strategy=auto |
+| regression_metrics | Table → — | prediction_column=prediction; label_column обязателен |
+| logistic_regression | Table → Model | features_column=features, fit_intercept=true, max_iter=100, reg_param=0, elastic_net_param=0, threshold=0.5; binary |
+| linear_svc | Table → Model | features_column=features, fit_intercept=true, max_iter=100, reg_param=0, threshold=0; binary L2 SVM |
+| decision_tree_classifier | Table → Model | как Tree Regressor; impurity=gini (gini/entropy) |
+| random_forest_classifier | Table → Model | как Forest Regressor; impurity=gini |
+| classification_metrics | Table → — | prediction_column=prediction; label_column обязателен |
 | predict | Table + Model → Table | — |
 | table_preview | Table → — | rows=100 |
 
 Limit rows: 1..2147483647; preview rows: 1..1000; max_iter:
 1..2147483647; reg_param >= 0; elastic_net_param: 0..1.
 Label и features columns различны; output_column не входит в columns.
-Только table_preview и linear_regression являются выбираемыми выходами.
+Выбираемые выходы: table_preview, linear_regression, regression_metrics и classification_metrics.
+Новые estimator-ноды передают Model в Predict, прямой model report для них
+пока не предусмотрен. Метрики и допустимые GLM family/link: [REGRESSION.md](REGRESSION.md).
+Classifier domains, probability/margin thresholds и weighted метрики:
+[CLASSIFICATION.md](CLASSIFICATION.md).
 Defaults применяются при явном создании, не изменяют загрузку старых .dcraft.
 
 ## §5. Реализация
@@ -76,8 +96,9 @@ Session и команды редактирования описаны в COMMAND
 Тесты сверяют публичный контракт с независимыми таблицами ожидаемых портов,
 полей JSON, defaults и диапазонов; проверяют malformed metadata и старые fixtures.
 Далее запускаются Rust fmt/check/test/Clippy и прежние CLI/Spark-примеры.
-Фактический результат: 21 Rust-тест, fmt/check/Clippy и три прежних Spark-примера
-прошли на Windows; детали и неисполненные проверки — в docs/VALIDATION.md.
+Актуальные результаты Rust/Scala и сквозных примеров, а также неисполненные
+проверки перечислены в docs/VALIDATION.md. Контракт подготовки признаков:
+[PREPROCESSING.md](PREPROCESSING.md).
 
 Пример discovery: `cargo run --locked -p datacraft-cli -- nodes --json`.
 Создание Rust-конфигурации:
@@ -93,6 +114,6 @@ config.validate_parameters()?;
 ## §8′. Устойчивость
 
 Ошибки пользователя возвращаются как Result, без panic. Реестр конечный,
-девять нод; поиск линейный. Parameter validation не читает datasets, не запускает
+24 ноды; поиск линейный. Parameter validation не читает datasets, не запускает
 JVM и не оценивает SQL. Проверка непустого local path не гарантирует существование
 файла. Реестр не доказывает универсальную bounded-memory работу Spark.

@@ -1,24 +1,72 @@
 {
   "format_version": 1,
-  "numerical_assumption": "ASSUMPTION: ML absolute tolerance 1e-6 is the existing provisional WorkerSuite acceptance contract, not a derived Spark solver error bound.",
+  "numerical_assumption": "ASSUMPTION: ML absolute tolerance 1e-6 is a provisional acceptance contract for Linear Regression and GLM, not a derived Spark solver error bound.",
   "pipelines": [
     {
       "project": "examples/pipelines/sample.dcraft",
       "readiness_issues": 0,
-      "tables": [{
-        "name": "Preview",
-        "fields": [{"name":"quantity","data_type":"integer"},{"name":"amount","data_type":"integer"}],
-        "rows": [{"quantity":4,"amount":11},{"quantity":5,"amount":13},{"quantity":6,"amount":15}]
-      }]
+      "tables": [
+        {
+          "name": "Preview",
+          "fields": [
+            {
+              "name": "quantity",
+              "data_type": "integer"
+            },
+            {
+              "name": "amount",
+              "data_type": "integer"
+            }
+          ],
+          "rows": [
+            {
+              "quantity": 4,
+              "amount": 11
+            },
+            {
+              "quantity": 5,
+              "amount": 13
+            },
+            {
+              "quantity": 6,
+              "amount": 15
+            }
+          ]
+        }
+      ]
     },
     {
       "project": "examples/pipelines/draft.dcraft",
       "readiness_issues": 2,
-      "tables": [{
-        "name": "Preview",
-        "fields": [{"name":"quantity","data_type":"integer"},{"name":"amount","data_type":"integer"}],
-        "rows": [{"quantity":4,"amount":11},{"quantity":5,"amount":13},{"quantity":6,"amount":15}]
-      }]
+      "tables": [
+        {
+          "name": "Preview",
+          "fields": [
+            {
+              "name": "quantity",
+              "data_type": "integer"
+            },
+            {
+              "name": "amount",
+              "data_type": "integer"
+            }
+          ],
+          "rows": [
+            {
+              "quantity": 4,
+              "amount": 11
+            },
+            {
+              "quantity": 5,
+              "amount": 13
+            },
+            {
+              "quantity": 6,
+              "amount": 15
+            }
+          ]
+        }
+      ]
     },
     {
       "project": "examples/pipelines/regression.dcraft",
@@ -26,27 +74,448 @@
       "tables": [
         {
           "name": "Coefficients",
-          "fields": [{"name":"parameter","data_type":"string"},{"name":"estimate","data_type":"double"}],
-          "rows": [{"parameter":"Intercept","estimate":3.0},{"parameter":"feature[0]","estimate":2.0}],
-          "absolute_tolerance": 0.000001
+          "fields": [
+            {
+              "name": "parameter",
+              "data_type": "string"
+            },
+            {
+              "name": "estimate",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "parameter": "Intercept",
+              "estimate": 3.0
+            },
+            {
+              "parameter": "feature[0]",
+              "estimate": 2.0
+            }
+          ],
+          "absolute_tolerance": 1e-06
         },
         {
           "name": "Training metrics",
-          "fields": [{"name":"metric","data_type":"string"},{"name":"value","data_type":"double"}],
-          "rows": [{"metric":"rmse","value":0.0},{"metric":"r2","value":1.0}],
-          "absolute_tolerance": 0.000001
+          "fields": [
+            {
+              "name": "metric",
+              "data_type": "string"
+            },
+            {
+              "name": "value",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "metric": "rmse",
+              "value": 0.0
+            },
+            {
+              "metric": "r2",
+              "value": 1.0
+            }
+          ],
+          "absolute_tolerance": 1e-06
         }
       ]
     },
     {
       "project": "examples/pipelines/prediction.dcraft",
       "readiness_issues": 0,
-      "tables": [{
-        "name": "Preview",
-        "fields": [{"name":"quantity","data_type":"integer"},{"name":"amount","data_type":"integer"},{"name":"prediction","data_type":"double"}],
-        "rows": [{"quantity":1,"amount":5,"prediction":5.0},{"quantity":2,"amount":7,"prediction":7.0},{"quantity":3,"amount":9,"prediction":9.0},{"quantity":4,"amount":11,"prediction":11.0},{"quantity":5,"amount":13,"prediction":13.0}],
-        "absolute_tolerance": 0.000001
-      }]
+      "tables": [
+        {
+          "name": "Preview",
+          "fields": [
+            {
+              "name": "quantity",
+              "data_type": "integer"
+            },
+            {
+              "name": "amount",
+              "data_type": "integer"
+            },
+            {
+              "name": "prediction",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "quantity": 1,
+              "amount": 5,
+              "prediction": 5.0
+            },
+            {
+              "quantity": 2,
+              "amount": 7,
+              "prediction": 7.0
+            },
+            {
+              "quantity": 3,
+              "amount": 9,
+              "prediction": 9.0
+            },
+            {
+              "quantity": 4,
+              "amount": 11,
+              "prediction": 11.0
+            },
+            {
+              "quantity": 5,
+              "amount": 13,
+              "prediction": 13.0
+            }
+          ],
+          "absolute_tolerance": 1e-06
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/index_categoricals.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Preview",
+          "fields": [
+            {
+              "name": "id",
+              "data_type": "long"
+            },
+            {
+              "name": "category",
+              "data_type": "string"
+            },
+            {
+              "name": "category_idx",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "id": 5,
+              "category": "a",
+              "category_idx": 0.0
+            },
+            {
+              "id": 6,
+              "category": "c",
+              "category_idx": 2.0
+            }
+          ],
+          "absolute_tolerance": 0.0
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/design_matrix.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Preview",
+          "fields": [
+            {
+              "name": "id",
+              "data_type": "long"
+            },
+            {
+              "name": "x",
+              "data_type": "long"
+            },
+            {
+              "name": "y",
+              "data_type": "long"
+            },
+            {
+              "name": "label",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "id": 5,
+              "x": 5,
+              "y": 13,
+              "label": 13.0
+            },
+            {
+              "id": 6,
+              "x": 6,
+              "y": 15,
+              "label": 15.0
+            }
+          ],
+          "absolute_tolerance": 0.0
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/glm_regression.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Regression metrics",
+          "fields": [
+            {
+              "name": "metric",
+              "data_type": "string"
+            },
+            {
+              "name": "value",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "metric": "rmse",
+              "value": 0.0
+            },
+            {
+              "metric": "mse",
+              "value": 0.0
+            },
+            {
+              "metric": "mae",
+              "value": 0.0
+            },
+            {
+              "metric": "r2",
+              "value": 1.0
+            }
+          ],
+          "absolute_tolerance": 1e-06
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/decision_tree.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Regression metrics",
+          "fields": [
+            {
+              "name": "metric",
+              "data_type": "string"
+            },
+            {
+              "name": "value",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "metric": "rmse",
+              "value": 0.0
+            },
+            {
+              "metric": "mse",
+              "value": 0.0
+            },
+            {
+              "metric": "mae",
+              "value": 0.0
+            },
+            {
+              "metric": "r2",
+              "value": 1.0
+            }
+          ],
+          "absolute_tolerance": 0.0
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/random_forest.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Regression metrics",
+          "fields": [
+            {
+              "name": "metric",
+              "data_type": "string"
+            },
+            {
+              "name": "value",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "metric": "rmse",
+              "value": 0.0
+            },
+            {
+              "metric": "mse",
+              "value": 0.0
+            },
+            {
+              "metric": "mae",
+              "value": 0.0
+            },
+            {
+              "metric": "r2",
+              "value": 1.0
+            }
+          ],
+          "absolute_tolerance": 0.0
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/logistic_regression.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Classification metrics",
+          "fields": [
+            {
+              "name": "metric",
+              "data_type": "string"
+            },
+            {
+              "name": "value",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "metric": "accuracy",
+              "value": 1.0
+            },
+            {
+              "metric": "weighted_precision",
+              "value": 1.0
+            },
+            {
+              "metric": "weighted_recall",
+              "value": 1.0
+            },
+            {
+              "metric": "weighted_f1",
+              "value": 1.0
+            }
+          ],
+          "absolute_tolerance": 0.0
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/linear_svc.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Classification metrics",
+          "fields": [
+            {
+              "name": "metric",
+              "data_type": "string"
+            },
+            {
+              "name": "value",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "metric": "accuracy",
+              "value": 1.0
+            },
+            {
+              "metric": "weighted_precision",
+              "value": 1.0
+            },
+            {
+              "metric": "weighted_recall",
+              "value": 1.0
+            },
+            {
+              "metric": "weighted_f1",
+              "value": 1.0
+            }
+          ],
+          "absolute_tolerance": 0.0
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/decision_tree_classifier.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Classification metrics",
+          "fields": [
+            {
+              "name": "metric",
+              "data_type": "string"
+            },
+            {
+              "name": "value",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "metric": "accuracy",
+              "value": 1.0
+            },
+            {
+              "metric": "weighted_precision",
+              "value": 1.0
+            },
+            {
+              "metric": "weighted_recall",
+              "value": 1.0
+            },
+            {
+              "metric": "weighted_f1",
+              "value": 1.0
+            }
+          ],
+          "absolute_tolerance": 0.0
+        }
+      ]
+    },
+    {
+      "project": "examples/pipelines/random_forest_classifier.dcraft",
+      "readiness_issues": 0,
+      "tables": [
+        {
+          "name": "Classification metrics",
+          "fields": [
+            {
+              "name": "metric",
+              "data_type": "string"
+            },
+            {
+              "name": "value",
+              "data_type": "double"
+            }
+          ],
+          "rows": [
+            {
+              "metric": "accuracy",
+              "value": 1.0
+            },
+            {
+              "metric": "weighted_precision",
+              "value": 1.0
+            },
+            {
+              "metric": "weighted_recall",
+              "value": 1.0
+            },
+            {
+              "metric": "weighted_f1",
+              "value": 1.0
+            }
+          ],
+          "absolute_tolerance": 0.0
+        }
+      ]
     }
   ]
 }

@@ -1,0 +1,198 @@
+{
+  "format_version": 1,
+  "name": "DataCraft logistic regression",
+  "nodes": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "position": [
+        40.0,
+        316.0
+      ],
+      "config": {
+        "kind": "json_source",
+        "path": "../data/classification.jsonl"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "position": [
+        380.0,
+        220.0
+      ],
+      "config": {
+        "kind": "filter",
+        "expression": "id <= 8"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000003",
+      "position": [
+        380.0,
+        412.0
+      ],
+      "config": {
+        "kind": "filter",
+        "expression": "id >= 9"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000004",
+      "position": [
+        720.0,
+        209.0
+      ],
+      "config": {
+        "kind": "make_design_matrix",
+        "formula": "target ~ x - 1",
+        "features_column": "features",
+        "label_column": "label",
+        "keep_unknown": false
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000005",
+      "position": [
+        1060.0,
+        40.0
+      ],
+      "config": {
+        "kind": "logistic_regression",
+        "label_column": "label",
+        "features_column": "features",
+        "fit_intercept": true,
+        "max_iter": 100,
+        "reg_param": 0.1,
+        "elastic_net_param": 0.0,
+        "threshold": 0.5
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000006",
+      "position": [
+        1060.0,
+        305.0
+      ],
+      "config": {
+        "kind": "transform"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000007",
+      "position": [
+        1400.0,
+        167.0
+      ],
+      "config": {
+        "kind": "predict"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000008",
+      "position": [
+        1740.0,
+        82.0
+      ],
+      "config": {
+        "kind": "select_columns",
+        "columns": [
+          "id",
+          "x",
+          "target",
+          "prediction"
+        ]
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000009",
+      "position": [
+        2080.0,
+        82.0
+      ],
+      "config": {
+        "kind": "table_preview",
+        "rows": 20
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000010",
+      "position": [
+        1740.0,
+        274.0
+      ],
+      "config": {
+        "kind": "classification_metrics",
+        "label_column": "label",
+        "prediction_column": "prediction"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "00000000-0000-0000-0000-000000000001",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000002",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000001",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000003",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000002",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000004",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000003",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000006",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000004",
+      "from_port": "model",
+      "to": "00000000-0000-0000-0000-000000000006",
+      "to_port": "model"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000004",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000005",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000005",
+      "from_port": "model",
+      "to": "00000000-0000-0000-0000-000000000007",
+      "to_port": "model"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000006",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000007",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000007",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000008",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000007",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000010",
+      "to_port": "table"
+    },
+    {
+      "from": "00000000-0000-0000-0000-000000000008",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000009",
+      "to_port": "table"
+    }
+  ],
+  "output_node": "00000000-0000-0000-0000-000000000010"
+}

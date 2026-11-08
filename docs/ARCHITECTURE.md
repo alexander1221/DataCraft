@@ -10,7 +10,7 @@ crates/datacraft-project    .dcraft, версии, сохранение, раз�
 crates/datacraft-engine     Session, CommandSpec, undo/redo, JobManager, JVM worker
 xtask                      архитектурная политика, реестры, Spark fixtures, CI
 workers/spark               Scala + Spark SQL / ML
-examples/data              небольшой CSV
+examples/data              небольшие CSV и NDJSON fixtures
 examples/pipelines         подготовленные проекты
 examples/expected          независимые ожидаемые схемы и значения
 ```
@@ -31,6 +31,14 @@ Rust core не зависит от Spark или egui.
 и ассеты в эту реализацию не переносились.
 
 ## Постоянная модель
+
+Подготовка признаков: Source → Split.train → fitted preprocessing;
+Split.test + preprocessing.model → Transform → Preview/Predict.
+Worker хранит таблицы по `(node UUID, port ID)`: train и test не заменяют друг
+друга. Fitted preprocessing, regression и classification models находятся
+в runtime-only map одного запроса, JSON содержит только конфигурации.
+Assemble Features объединяет числовые колонки и ML-векторы; промежуточные
+DataFrame остаются lazy. Контракт: [PREPROCESSING.md](PREPROCESSING.md).
 
 Проекты версии 1 допускают черновой граф. Load/save проверяют целостность,
 а не готовность к исполнению. Строгие Project::validate/Graph::validate
@@ -67,12 +75,16 @@ pan/zoom, незавершённые drag/connection и буфер параме�
 правки Add/Remove/Configure/Connect/Disconnect и завершённый Move отправляются
 в Session. Палитра и поля инспектора читают NodeSpec. Подробнее:
 [DESKTOP.md](DESKTOP.md), [GRAPH_EDITOR.md](GRAPH_EDITOR.md).
+Системные диалоги rfd и буфер Rename относятся только к UI layer. Native future
+опрашивается без блокирующего ожидания, результаты проверяются по revision/UUID.
+Rename использует существующий Command::Rename. Контракт: [FILE_DIALOGS.md](FILE_DIALOGS.md).
 Точные правила атомарности и SaveAs: [COMMANDS.md](COMMANDS.md).
 
 Полный граф проходит проверку целостности; параметры и обязательные входы
 проверяются только для выбранной ветки. Исполняется только замыкание
 зависимостей выбранного выхода. Выход задаётся флагом CLI, затем `output_node`,
-затем единственным кандидатом `TablePreview` / `LinearRegression`.
+затем единственным кандидатом `TablePreview` / `LinearRegression` /
+`RegressionMetrics` / `ClassificationMetrics`.
 
 Rust запускает `java` напрямую, без shell. stdin/stdout передают JSON Lines;
 stderr содержит диагностику Spark. Worker использует одну SparkSession

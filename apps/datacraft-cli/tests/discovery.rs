@@ -56,14 +56,29 @@ fn node_discovery_is_machine_readable_and_does_not_require_java() {
         ids,
         [
             "assemble_features",
+            "classification_metrics",
             "csv_source",
+            "decision_tree_classifier",
+            "decision_tree_regressor",
             "filter",
+            "generalized_linear_regression",
+            "index_categoricals",
+            "json_source",
             "limit",
             "linear_regression",
+            "linear_svc",
+            "logistic_regression",
+            "make_design_matrix",
             "parquet_source",
             "predict",
+            "random_forest_classifier",
+            "random_forest_regressor",
+            "reference_code_categoricals",
+            "regression_metrics",
             "select_columns",
-            "table_preview"
+            "table_preview",
+            "train_test_split",
+            "transform"
         ]
     );
     let preview = nodes

@@ -1,6 +1,6 @@
 //! Typed inspector buffers, separate from Project state. Contract: docs/GRAPH_EDITOR.md.
 use datacraft_core::{
-    registry::{ParameterSpec, ParameterType},
+    registry::{ParameterRule, ParameterSpec, ParameterType},
     Node, NodeKind,
 };
 use eframe::egui;
@@ -23,6 +23,10 @@ struct Field {
 pub enum EditorAction {
     Apply,
     Revert,
+    Browse {
+        parameter: &'static str,
+        format: crate::file_dialog::SourceFormat,
+    },
 }
 
 pub struct ParameterEditor {
@@ -84,6 +88,55 @@ impl ParameterEditor {
         }
     }
 
+    pub fn local_path(&self, parameter: &str) -> Option<&str> {
+        self.fields
+            .iter()
+            .find(|f| {
+                f.spec.name == parameter
+                    && f.spec
+                        .rules
+                        .iter()
+                        .any(|r| matches!(r, ParameterRule::LocalPath))
+            })
+            .and_then(|f| match &f.value {
+                FieldValue::String(path) => Some(path.as_str()),
+                _ => None,
+            })
+    }
+
+    pub fn set_local_path(
+        &mut self,
+        parameter: &str,
+        path: &std::path::Path,
+    ) -> Result<(), String> {
+        let value = path
+            .to_str()
+            .ok_or("The selected source path is not valid UTF-8")?;
+        if !path.is_absolute() {
+            return Err(
+                "The file dialog returned a relative source path; enter it manually instead".into(),
+            );
+        }
+        let field = self
+            .fields
+            .iter_mut()
+            .find(|f| {
+                f.spec.name == parameter
+                    && f.spec
+                        .rules
+                        .iter()
+                        .any(|r| matches!(r, ParameterRule::LocalPath))
+            })
+            .ok_or("This node has no matching local file parameter")?;
+        match &mut field.value {
+            FieldValue::String(text) => {
+                *text = value.into();
+                Ok(())
+            }
+            _ => Err("The file parameter is not a string".into()),
+        }
+    }
+
     pub fn config(&self) -> Result<NodeKind, String> {
         let mut values = Map::new();
         values.insert("kind".into(), self.original.spec().id.into());
@@ -127,12 +180,35 @@ impl ParameterEditor {
     }
 
     fn show_fields(&mut self, ui: &mut egui::Ui) -> Option<EditorAction> {
+        let mut action = None;
+        let source_format = match self.original {
+            NodeKind::CsvSource { .. } => Some(crate::file_dialog::SourceFormat::Csv),
+            NodeKind::ParquetSource { .. } => Some(crate::file_dialog::SourceFormat::Parquet),
+            NodeKind::JsonSource { .. } => Some(crate::file_dialog::SourceFormat::Json),
+            _ => None,
+        };
         for field in &mut self.fields {
             ui.push_id(field.spec.name, |ui| {
                 ui.strong(field.spec.label);
                 match &mut field.value {
                     FieldValue::String(value) | FieldValue::Number(value) => {
                         ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY));
+                        if field
+                            .spec
+                            .rules
+                            .iter()
+                            .any(|r| matches!(r, ParameterRule::LocalPath))
+                        {
+                            if let Some(format) = source_format {
+                                if ui.small_button("Browse…").clicked() {
+                                    action = Some(EditorAction::Browse {
+                                        parameter: field.spec.name,
+                                        format,
+                                    });
+                                }
+                            }
+                            ui.small("Relative paths start in the saved project's folder");
+                        }
                     }
                     FieldValue::Boolean(value) => {
                         ui.checkbox(value, "Enabled");
@@ -165,7 +241,6 @@ impl ParameterEditor {
         if self.fields.is_empty() {
             ui.label("This node has no parameters");
         }
-        let mut action = None;
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(self.is_dirty(), egui::Button::new("Apply"))

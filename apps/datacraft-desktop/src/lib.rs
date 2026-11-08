@@ -1,12 +1,18 @@
 //! Native Session adapter; contracts and manual acceptance: docs/DESKTOP.md.
 mod canvas;
 mod editor;
+mod file_dialog;
+mod layout;
+pub use layout::arranged_positions;
 
 use canvas::{Action, Canvas};
 use datacraft_core::{builtin_nodes, find_node, Node};
 use datacraft_engine::{jobs::ExecutionEvent, Command, CommandPayload, Session, WorkerConfig};
 use editor::{EditorAction, ParameterEditor};
 use eframe::egui::{self, Color32};
+use file_dialog::{
+    FileDialogs, Purpose as FilePurpose, Request as FileRequest, Selection as FileSelection,
+};
 use std::{path::PathBuf, time::Duration};
 use uuid::Uuid;
 
@@ -17,6 +23,8 @@ pub struct Desktop {
     editor: Option<ParameterEditor>,
     pending_select: Option<Uuid>,
     pending_new: bool,
+    file_dialogs: FileDialogs,
+    rename: Option<RenameDraft>,
     path: String,
     status: String,
     error: Option<String>,
@@ -26,6 +34,12 @@ pub struct Desktop {
     allow_close: bool,
     smoke_frames: Option<u32>,
     frames: u32,
+}
+
+struct RenameDraft {
+    name: String,
+    revision: u64,
+    focus: bool,
 }
 
 impl Desktop {
@@ -39,6 +53,8 @@ impl Desktop {
             editor: None,
             pending_select: None,
             pending_new: false,
+            file_dialogs: FileDialogs::default(),
+            rename: None,
             path: String::new(),
             status: "Open a local .dcraft project".into(),
             error: None,
@@ -107,11 +123,125 @@ impl Desktop {
             .is_some_and(|j| !j.status.is_terminal())
     }
 
+    fn request_file(&mut self, purpose: FilePurpose, initial_path: Option<PathBuf>) {
+        if self.rename.is_some() {
+            self.error = Some("Finish renaming before opening a file dialog".into());
+            return;
+        }
+        let request = FileRequest {
+            purpose,
+            revision: self.session.revision(),
+            initial_path,
+        };
+        match self.file_dialogs.queue(request) {
+            Ok(()) => self.canvas.cancel_gestures(),
+            Err(error) => self.error = Some(error),
+        }
+    }
+
+    fn save_dialog(&mut self, close_after: bool) {
+        let path = self
+            .session
+            .path()
+            .map(std::path::Path::to_owned)
+            .or_else(|| (!self.path.trim().is_empty()).then(|| PathBuf::from(&self.path)));
+        self.request_file(FilePurpose::SaveProject { close_after }, path);
+    }
+
+    fn request_open(&mut self, path: PathBuf) {
+        if self.has_unsaved() {
+            self.pending_open = Some(path);
+        } else {
+            self.open(path, false);
+        }
+    }
+
+    fn handle_file_selection(&mut self, selection: FileSelection, ctx: &egui::Context) {
+        let Some(path) = selection.path else {
+            self.status =
+                "File dialog closed without a selection; manual paths are also available".into();
+            return;
+        };
+        if selection.request.revision != self.session.revision() {
+            self.error = Some(
+                "Project changed while the file dialog was open; choose the file again".into(),
+            );
+            return;
+        }
+        match selection.request.purpose {
+            FilePurpose::OpenProject => self.request_open(path),
+            FilePurpose::SaveProject { close_after } => {
+                if self.apply_parameters()
+                    && self.dispatch(Command::SaveAs {
+                        path: file_dialog::project_extension(path),
+                    })
+                    && close_after
+                {
+                    self.finish_close(ctx);
+                }
+            }
+            FilePurpose::Source {
+                node_id, parameter, ..
+            } => {
+                if self.selected != Some(node_id) {
+                    self.error = Some(
+                        "Source selection belongs to another node; choose the file again".into(),
+                    );
+                    return;
+                }
+                let result = self
+                    .editor
+                    .as_mut()
+                    .filter(|e| e.node_id == node_id)
+                    .ok_or_else(|| "The source inspector is no longer open".to_string())
+                    .and_then(|e| e.set_local_path(parameter, &path));
+                match result {
+                    Ok(()) => {
+                        self.error = None;
+                        self.status = "Source selected — Apply to update the node".into();
+                    }
+                    Err(error) => self.error = Some(error),
+                }
+            }
+        }
+    }
+
+    fn begin_rename(&mut self) {
+        if self.file_dialogs.is_busy() || self.has_unapplied() {
+            return;
+        }
+        if let Some(project) = self.session.project() {
+            self.rename = Some(RenameDraft {
+                name: project.name.clone(),
+                revision: self.session.revision(),
+                focus: true,
+            });
+            self.error = None;
+        }
+    }
+
+    fn apply_rename(&mut self) -> bool {
+        let Some(draft) = &self.rename else {
+            return false;
+        };
+        if draft.revision != self.session.revision() {
+            self.error = Some("Project changed; cancel and reopen Rename".into());
+            return false;
+        }
+        let name = draft.name.clone();
+        if self.dispatch(Command::Rename { name }) {
+            self.rename = None;
+            true
+        } else {
+            false
+        }
+    }
+
     fn has_unapplied(&self) -> bool {
         self.editor.as_ref().is_some_and(ParameterEditor::is_dirty)
     }
     fn has_unsaved(&self) -> bool {
-        self.session.is_dirty() || self.has_unapplied()
+        self.session.is_dirty() || self.has_unapplied() || self.rename.is_some()
     }
 
     fn new_project(&mut self, discard_changes: bool) {
@@ -232,13 +362,47 @@ impl Desktop {
         }
     }
 
+    fn arrange(&mut self) {
+        let Some(project) = self.session.project() else {
+            return;
+        };
+        match arranged_positions(&project.graph) {
+            Ok(positions) => {
+                let commands = positions
+                    .into_iter()
+                    .map(|(node_id, position)| Command::MoveNode { node_id, position })
+                    .collect();
+                self.canvas.cancel_gestures();
+                if self.dispatch(Command::Batch { commands }) {
+                    self.canvas.fit = true;
+                }
+            }
+            Err(error) => self.error = Some(error.to_string()),
+        }
+    }
+
     fn palette(&mut self, ctx: &egui::Context) {
         egui::SidePanel::left("palette")
             .default_width(170.0)
             .show(ctx, |ui| {
                 ui.heading("Nodes");
+                if ui
+                    .add_enabled(
+                        self.session
+                            .project()
+                            .is_some_and(|p| !p.graph.nodes.is_empty())
+                            && !self.file_dialogs.is_busy()
+                            && !self.has_unapplied(),
+                        egui::Button::new("Arrange"),
+                    )
+                    .clicked()
+                {
+                    self.arrange();
+                }
                 egui::ScrollArea::vertical().show(ui, |ui| {
-                    let enabled = self.session.project().is_some() && !self.has_unapplied();
+                    let enabled = self.session.project().is_some()
+                        && !self.has_unapplied()
+                        && !self.file_dialogs.is_busy();
                     for spec in builtin_nodes() {
                         if ui
                             .add_enabled(enabled, egui::Button::new(spec.label))
@@ -289,14 +453,31 @@ impl Desktop {
         }
     }
 
+    fn request_close(&mut self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        if self.file_dialogs.is_busy() {
+            self.status = "Close the file dialog before exiting DataCraft".into();
+        } else if self.rename.is_some() {
+            self.error = Some("Finish or cancel renaming before closing the project".into());
+        } else if self.has_unsaved() {
+            self.close_dialog = true;
+        } else {
+            self.finish_close(ctx);
+        }
+    }
+
     fn toolbar(&mut self, ctx: &egui::Context) {
+        let choosing = self.file_dialogs.is_busy();
         egui::TopBottomPanel::top("toolbar")
             .min_height(90.0)
             .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.heading("DataCraft");
                     if ui
-                        .add_enabled(!self.active_job(), egui::Button::new("New project"))
+                        .add_enabled(
+                            !self.active_job() && !choosing,
+                            egui::Button::new("New project"),
+                        )
                         .clicked()
                     {
                         if self.has_unsaved() {
@@ -316,10 +497,19 @@ impl Desktop {
                             .truncate(),
                         );
                     }
+                    if ui
+                        .add_enabled(
+                            self.session.project().is_some() && !choosing && !self.has_unapplied(),
+                            egui::Button::new("Rename project…"),
+                        )
+                        .clicked()
+                    {
+                        self.begin_rename();
+                    }
                     ui.separator();
                     if ui
                         .add_enabled(
-                            self.session.can_undo() && !self.has_unapplied(),
+                            self.session.can_undo() && !self.has_unapplied() && !choosing,
                             egui::Button::new("Undo"),
                         )
                         .clicked()
@@ -328,7 +518,7 @@ impl Desktop {
                     }
                     if ui
                         .add_enabled(
-                            self.session.can_redo() && !self.has_unapplied(),
+                            self.session.can_redo() && !self.has_unapplied() && !choosing,
                             egui::Button::new("Redo"),
                         )
                         .clicked()
@@ -341,7 +531,9 @@ impl Desktop {
                     let run = Command::Run { output: None };
                     if ui
                         .add_enabled(
-                            self.session.availability(&run).enabled && !self.has_unapplied(),
+                            self.session.availability(&run).enabled
+                                && !self.has_unapplied()
+                                && !choosing,
                             egui::Button::new("Run project"),
                         )
                         .clicked()
@@ -361,7 +553,8 @@ impl Desktop {
                         .add_enabled(
                             output.is_some()
                                 && self.session.availability(&selected_run).enabled
-                                && !self.has_unapplied(),
+                                && !self.has_unapplied()
+                                && !choosing,
                             egui::Button::new("Run selected"),
                         )
                         .clicked()
@@ -379,27 +572,45 @@ impl Desktop {
                 });
                 ui.horizontal(|ui| {
                     ui.label("Project path");
-                    ui.add(
+                    ui.add_enabled(
+                        !choosing,
                         egui::TextEdit::singleline(&mut self.path)
-                            .desired_width((ui.available_width() - 220.0).max(180.0)),
+                            .desired_width((ui.available_width() - 430.0).max(120.0)),
                     );
                     if ui
-                        .add_enabled(!self.active_job(), egui::Button::new("Open"))
+                        .add_enabled(!self.active_job() && !choosing, egui::Button::new("Open…"))
+                        .clicked()
+                    {
+                        let initial =
+                            (!self.path.trim().is_empty()).then(|| PathBuf::from(&self.path));
+                        self.request_file(FilePurpose::OpenProject, initial);
+                    }
+                    if ui
+                        .add_enabled(
+                            !self.active_job() && !choosing,
+                            egui::Button::new("Open path"),
+                        )
                         .clicked()
                     {
                         let path = PathBuf::from(&self.path);
-                        if self.has_unsaved() {
-                            self.pending_open = Some(path);
+                        self.request_open(path);
+                    }
+                    let loaded = self.session.project().is_some() && !choosing;
+                    if ui.add_enabled(loaded, egui::Button::new("Save")).clicked() {
+                        if self.session.path().is_some() {
+                            self.save(false);
                         } else {
-                            self.open(path, false);
+                            self.save_dialog(false);
                         }
                     }
-                    let loaded = self.session.project().is_some();
-                    if ui.add_enabled(loaded, egui::Button::new("Save")).clicked() {
-                        self.save(false);
+                    if ui
+                        .add_enabled(loaded, egui::Button::new("Save as…"))
+                        .clicked()
+                    {
+                        self.save_dialog(false);
                     }
                     if ui
-                        .add_enabled(loaded, egui::Button::new("Save as"))
+                        .add_enabled(loaded, egui::Button::new("Save path"))
                         .clicked()
                     {
                         self.save(true);
@@ -449,10 +660,12 @@ impl Desktop {
                         ui.separator();
                         ui.strong("Parameters");
                         if let Some(editor) = &mut self.editor {
-                            editor_action = editor.show(ui);
+                            editor_action = ui
+                                .add_enabled_ui(!self.file_dialogs.is_busy(), |ui| editor.show(ui))
+                                .inner;
                         }
                         ui.separator();
-                        let pending = self.has_unapplied();
+                        let pending = self.has_unapplied() || self.file_dialogs.is_busy();
                         if ui
                             .add_enabled(!pending, egui::Button::new("Delete node"))
                             .clicked()
@@ -563,6 +776,21 @@ impl Desktop {
                     self.error = None;
                     self.status = "Parameter edits reverted".into();
                 }
+                EditorAction::Browse { parameter, format } => {
+                    if let Some(editor) = &self.editor {
+                        let initial = editor
+                            .local_path(parameter)
+                            .and_then(|path| file_dialog::source_start(path, self.session.path()));
+                        self.request_file(
+                            FilePurpose::Source {
+                                node_id: editor.node_id,
+                                parameter,
+                                format,
+                            },
+                            initial,
+                        );
+                    }
+                }
             }
         }
         if let Some(command) = command {
@@ -600,7 +828,7 @@ impl Desktop {
                     if !self.session.result_is_current() {
                         ui.colored_label(
                             Color32::YELLOW,
-                            "Result belongs to an earlier project revision",
+                            "Pipeline changed since this result was computed",
                         );
                     }
                     egui::ScrollArea::both().show(ui, |ui| {
@@ -619,6 +847,8 @@ impl Desktop {
                                 .collect();
                             egui::Grid::new(("preview", index))
                                 .striped(true)
+                                .spacing(egui::vec2(28.0, 6.0))
+                                .min_col_width(64.0)
                                 .show(ui, |ui| {
                                     for column in &columns {
                                         ui.strong(*column);
@@ -695,8 +925,13 @@ impl Desktop {
                 }
                 ui.label("The project or inspector contains unsaved changes.");
                 ui.horizontal(|ui| {
-                    if ui.button("Save and close").clicked() && self.save(false) {
-                        self.finish_close(ctx);
+                    if ui.button("Save and close").clicked() {
+                        if self.session.path().is_none() {
+                            self.close_dialog = false;
+                            self.save_dialog(true);
+                        } else if self.save(false) {
+                            self.finish_close(ctx);
+                        }
                     }
                     if ui.button("Discard and close").clicked() {
                         self.finish_close(ctx);
@@ -706,6 +941,35 @@ impl Desktop {
                     }
                 });
             });
+        } else if self.rename.is_some() {
+            let mut apply = false;
+            let mut cancel = false;
+            egui::Modal::new(egui::Id::new("rename_project")).show(ctx, |ui| {
+                ui.heading("Rename project");
+                if let Some(error) = &self.error {
+                    ui.colored_label(Color32::LIGHT_RED, error);
+                }
+                if let Some(draft) = &mut self.rename {
+                    ui.label("Project name");
+                    let input = ui.text_edit_singleline(&mut draft.name);
+                    if draft.focus {
+                        input.request_focus();
+                        draft.focus = false;
+                    }
+                }
+                ui.label("This changes the project name, not the file name");
+                ui.horizontal(|ui| {
+                    apply = ui.button("Rename").clicked();
+                    cancel = ui.button("Cancel rename").clicked();
+                });
+            });
+            if apply {
+                self.apply_rename();
+            }
+            if cancel {
+                self.rename = None;
+                self.error = None;
+            }
         }
     }
 
@@ -716,6 +980,9 @@ impl Desktop {
                 ExecutionEvent::Failed { error, .. } => self.error = Some(error.message),
                 _ => {}
             }
+        }
+        if let Some(selection) = self.file_dialogs.poll(ctx) {
+            self.handle_file_selection(selection, ctx);
         }
         if self.closing {
             if !self.active_job() {
@@ -731,8 +998,12 @@ impl Desktop {
         self.results(ctx);
         self.inspector(ctx);
         self.palette(ctx);
+        let choosing = self.file_dialogs.is_busy();
         let actions = egui::CentralPanel::default()
             .show(ctx, |ui| {
+                if choosing {
+                    ui.disable();
+                }
                 if let Some(project) = self.session.project() {
                     self.canvas.show(ui, &project.graph, self.selected)
                 } else {
@@ -744,6 +1015,9 @@ impl Desktop {
             })
             .inner;
         for action in actions {
+            if choosing {
+                continue;
+            }
             match action {
                 Action::Select(id) => self.select(id),
                 Action::Move(node_id, position) => {
@@ -764,28 +1038,25 @@ impl Desktop {
             self.editor = None;
         }
         self.dialogs(ctx);
-        if self.active_job() {
+        if self.active_job() || self.file_dialogs.is_busy() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
 }
 
 impl eframe::App for Desktop {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         if ctx.input(|i| i.viewport().close_requested()) && !self.allow_close {
-            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            if self.has_unsaved() {
-                self.close_dialog = true;
-            } else {
-                self.finish_close(ctx);
-            }
+            self.request_close(ctx);
         }
         self.render(ctx);
+        self.file_dialogs.start(frame);
         self.frames = self.frames.saturating_add(1);
         if self.smoke_frames.is_some_and(|limit| self.frames >= limit)
             && !self.has_unsaved()
             && !self.active_job()
             && !self.allow_close
+            && !self.file_dialogs.is_busy()
         {
             println!(
                 "Native startup: {} frames, project loaded: {}",
@@ -801,432 +1072,4 @@ impl eframe::App for Desktop {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn text_position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
-        output
-            .shapes
-            .iter()
-            .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text) if text.galley.job.text == label => {
-                    Some(text.pos + text.galley.size() * 0.5)
-                }
-                _ => None,
-            })
-            .unwrap_or_else(|| panic!("missing visible UI text {label}"))
-    }
-
-    fn click(app: &mut Desktop, ctx: &egui::Context, pos: egui::Pos2) {
-        frame(
-            app,
-            ctx,
-            vec![
-                egui::Event::PointerMoved(pos),
-                egui::Event::PointerButton {
-                    pos,
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    modifiers: Default::default(),
-                },
-            ],
-        );
-        frame(
-            app,
-            ctx,
-            vec![egui::Event::PointerButton {
-                pos,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: Default::default(),
-            }],
-        );
-    }
-
-    fn click_label(app: &mut Desktop, ctx: &egui::Context, label: &str) {
-        // egui Areas use a sizing pass before a newly opened Modal becomes visible.
-        frame(app, ctx, Vec::new());
-        let output = frame(app, ctx, Vec::new());
-        let pos = text_position(&output, label);
-        click(app, ctx, pos);
-    }
-
-    fn edit_string(app: &mut Desktop, ctx: &egui::Context, label: &str, value: &str) {
-        frame(app, ctx, Vec::new());
-        let output = frame(app, ctx, Vec::new());
-        let label = text_position(&output, label);
-        click(app, ctx, label + egui::vec2(0.0, 26.0));
-        frame(
-            app,
-            ctx,
-            vec![
-                egui::Event::Key {
-                    key: egui::Key::A,
-                    physical_key: None,
-                    pressed: true,
-                    repeat: false,
-                    modifiers: egui::Modifiers {
-                        ctrl: true,
-                        command: true,
-                        ..Default::default()
-                    },
-                },
-                egui::Event::Text(value.into()),
-            ],
-        );
-    }
-
-    #[test]
-    fn inspector_input_is_guarded_until_apply_and_undo_restores_config() {
-        let mut app = app();
-        let ctx = egui::Context::default();
-        app.select(Uuid::from_u128(2));
-        let original = app.session.project().cloned().unwrap();
-        edit_string(&mut app, &ctx, "SQL expression", "quantity >= 5");
-        assert!(app.has_unapplied());
-        assert!(!app.session.is_dirty());
-        assert_eq!(app.session.project(), Some(&original));
-        app.select(Uuid::from_u128(3));
-        assert_eq!(app.selected, Some(Uuid::from_u128(2)));
-        assert_eq!(app.pending_select, Some(Uuid::from_u128(3)));
-        app.open(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("../../examples/pipelines/sample.dcraft"),
-            false,
-        );
-        app.new_project(false);
-        assert_eq!(app.session.project(), Some(&original));
-        assert!(app.has_unapplied());
-        click_label(&mut app, &ctx, "Keep editing");
-        click_label(&mut app, &ctx, "Apply");
-        assert!(!app.has_unapplied());
-        assert!(app.session.is_dirty());
-        assert!(
-            matches!(&app.session.project().unwrap().graph.nodes[1].config,datacraft_core::NodeKind::Filter {expression} if expression=="quantity >= 5")
-        );
-        click_label(&mut app, &ctx, "Undo");
-        assert_eq!(app.session.project(), Some(&original));
-        assert!(!app.has_unapplied());
-        assert!(!app.has_unsaved());
-    }
-
-    #[test]
-    fn palette_add_delete_and_draft_save_round_trip_use_session_history() {
-        let mut app = app();
-        app.new_project(true);
-        let ctx = egui::Context::default();
-        frame(&mut app, &ctx, Vec::new());
-        click_label(&mut app, &ctx, "Filter");
-        assert_eq!(app.session.project().unwrap().graph.nodes.len(), 1);
-        let id = app.selected.unwrap();
-        assert_eq!(app.editor.as_ref().unwrap().node_id, id);
-        assert_eq!(
-            app.session
-                .project()
-                .unwrap()
-                .graph
-                .diagnostics()
-                .unwrap()
-                .len(),
-            2
-        );
-        let before = app.session.project().cloned().unwrap();
-        click_label(&mut app, &ctx, "Delete node");
-        assert!(app.session.project().unwrap().graph.nodes.is_empty());
-        click_label(&mut app, &ctx, "Undo");
-        assert_eq!(app.session.project(), Some(&before));
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("draft.dcraft");
-        app.path = path.to_string_lossy().into_owned();
-        assert!(app.save(true));
-        assert!(!app.has_unsaved());
-        app.new_project(false);
-        app.open(path, true);
-        assert_eq!(app.session.project(), Some(&before));
-        assert_eq!(
-            app.session
-                .project()
-                .unwrap()
-                .graph
-                .diagnostics()
-                .unwrap()
-                .len(),
-            2
-        );
-    }
-
-    #[test]
-    fn rejected_cycle_and_incompatible_wire_preserve_graph_and_undo() {
-        let mut app = app();
-        app.new_project(true);
-        app.add_node("filter");
-        let a = app.selected.unwrap();
-        app.add_node("filter");
-        let b = app.selected.unwrap();
-        let wire = |from, to| datacraft_core::Edge {
-            from,
-            to,
-            from_port: "table".into(),
-            to_port: "table".into(),
-        };
-        assert!(app.dispatch(Command::Connect { edge: wire(a, b) }));
-        let before = app.session.project().cloned();
-        assert!(!app.dispatch(Command::Connect { edge: wire(b, a) }));
-        assert_eq!(app.session.project(), before.as_ref());
-        assert!(app.dispatch(Command::Undo));
-        assert!(app.session.project().unwrap().graph.edges.is_empty());
-        app.add_node("linear_regression");
-        let model = app.selected.unwrap();
-        app.add_node("table_preview");
-        let preview = app.selected.unwrap();
-        let before = app.session.project().cloned();
-        assert!(!app.dispatch(Command::Connect {
-            edge: datacraft_core::Edge {
-                from: model,
-                from_port: "model".into(),
-                to: preview,
-                to_port: "table".into()
-            }
-        }));
-        assert_eq!(app.session.project(), before.as_ref());
-    }
-
-    #[test]
-    fn invalid_numeric_buffer_cannot_save_or_silently_disappear() {
-        let mut app = app();
-        let ctx = egui::Context::default();
-        app.select(Uuid::from_u128(4));
-        let before = app.session.project().cloned();
-        edit_string(&mut app, &ctx, "Rows", "not a number");
-        assert!(app.has_unapplied());
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("must-not-exist.dcraft");
-        app.path = path.to_string_lossy().into_owned();
-        assert!(!app.save(true));
-        assert!(!path.exists());
-        assert_eq!(app.session.project(), before.as_ref());
-        assert!(app.has_unsaved());
-        assert!(!app.active_job());
-        click_label(&mut app, &ctx, "Revert");
-        assert!(!app.has_unapplied());
-        assert_eq!(app.session.project(), before.as_ref());
-    }
-
-    #[test]
-    fn delete_and_disconnect_buttons_are_undoable_with_incident_edges() {
-        let mut app = app();
-        let ctx = egui::Context::default();
-        app.select(Uuid::from_u128(1));
-        let before = app.session.project().cloned().unwrap();
-        click_label(&mut app, &ctx, "Disconnect");
-        assert_eq!(
-            app.session.project().unwrap().graph.edges.len(),
-            before.graph.edges.len() - 1
-        );
-        click_label(&mut app, &ctx, "Undo");
-        assert_eq!(app.session.project(), Some(&before));
-        click_label(&mut app, &ctx, "Delete node");
-        assert_eq!(
-            app.session.project().unwrap().graph.nodes.len(),
-            before.graph.nodes.len() - 1
-        );
-        assert!(app
-            .session
-            .project()
-            .unwrap()
-            .graph
-            .edges
-            .iter()
-            .all(|e| e.from != Uuid::from_u128(1) && e.to != Uuid::from_u128(1)));
-        click_label(&mut app, &ctx, "Undo");
-        assert_eq!(app.session.project(), Some(&before));
-    }
-
-    fn frame(app: &mut Desktop, ctx: &egui::Context, events: Vec<egui::Event>) -> egui::FullOutput {
-        ctx.run(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(1280.0, 800.0),
-                )),
-                events,
-                ..Default::default()
-            },
-            |ctx| app.render(ctx),
-        )
-    }
-
-    #[cfg(feature = "spark-integration-tests")]
-    #[test]
-    fn run_button_executes_real_spark_and_preview_is_rendered() {
-        let mut app = app();
-        app.session.configure_worker(WorkerConfig {
-            java: std::env::var_os("DATACRAFT_JAVA").map_or_else(|| "java".into(), PathBuf::from),
-            classpath_file: std::env::var_os("DATACRAFT_WORKER_CLASSPATH").map_or_else(
-                || {
-                    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                        .join("../../workers/spark/target/classpath.txt")
-                },
-                PathBuf::from,
-            ),
-        });
-        let ctx = egui::Context::default();
-        frame(&mut app, &ctx, Vec::new());
-        let output = frame(&mut app, &ctx, Vec::new());
-        let button = output
-            .shapes
-            .iter()
-            .find_map(|clipped| match &clipped.shape {
-                egui::Shape::Text(text) if text.galley.job.text == "Run project" => {
-                    Some(text.pos + text.galley.size() * 0.5)
-                }
-                _ => None,
-            })
-            .expect("run button must be rendered");
-        frame(
-            &mut app,
-            &ctx,
-            vec![
-                egui::Event::PointerMoved(button),
-                egui::Event::PointerButton {
-                    pos: button,
-                    button: egui::PointerButton::Primary,
-                    pressed: true,
-                    modifiers: Default::default(),
-                },
-            ],
-        );
-        frame(
-            &mut app,
-            &ctx,
-            vec![egui::Event::PointerButton {
-                pos: button,
-                button: egui::PointerButton::Primary,
-                pressed: false,
-                modifiers: Default::default(),
-            }],
-        );
-        assert!(
-            app.session.current_job().is_some(),
-            "click must dispatch an execution job: {:?}",
-            app.error
-        );
-        let deadline = std::time::Instant::now() + Duration::from_secs(90);
-        while app.active_job() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "GUI preview acceptance timed out"
-            );
-            frame(&mut app, &ctx, Vec::new());
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let output = frame(&mut app, &ctx, Vec::new());
-        assert_eq!(
-            app.session.current_job().unwrap().status,
-            datacraft_engine::jobs::JobStatus::Completed
-        );
-        let result = app.session.last_execution().expect("completed preview");
-        assert_eq!(result.result.tables.len(), 1);
-        assert_eq!(
-            result.result.tables[0].rows,
-            vec![
-                serde_json::json!({"quantity":4,"amount":11}),
-                serde_json::json!({"quantity":5,"amount":13}),
-                serde_json::json!({"quantity":6,"amount":15}),
-            ]
-        );
-        assert!(output.shapes.iter().any(|clipped|matches!(&clipped.shape,egui::Shape::Text(t) if t.galley.job.text.contains("3 rows"))));
-        let first_job = app.session.current_job().unwrap().id;
-        app.select(Uuid::from_u128(2));
-        edit_string(&mut app, &ctx, "SQL expression", "quantity >= 5");
-        assert!(app.has_unapplied());
-        click_label(&mut app, &ctx, "Apply");
-        click_label(&mut app, &ctx, "Run project");
-        assert_ne!(app.session.current_job().unwrap().id, first_job);
-        let deadline = std::time::Instant::now() + Duration::from_secs(90);
-        while app.active_job() {
-            assert!(
-                std::time::Instant::now() < deadline,
-                "edited preview acceptance timed out"
-            );
-            frame(&mut app, &ctx, Vec::new());
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        frame(&mut app, &ctx, Vec::new());
-        assert_eq!(
-            app.session.current_job().unwrap().status,
-            datacraft_engine::jobs::JobStatus::Completed
-        );
-        assert_eq!(
-            app.session.last_execution().unwrap().result.tables[0].rows,
-            vec![
-                serde_json::json!({"quantity":5,"amount":13}),
-                serde_json::json!({"quantity":6,"amount":15}),
-                serde_json::json!({"quantity":7,"amount":17}),
-            ]
-        );
-        app.new_project(true);
-        frame(&mut app, &ctx, Vec::new());
-        assert!(app.session.current_job().is_none());
-        assert!(app.session.last_execution().is_none());
-    }
-    fn app() -> Desktop {
-        Desktop::new(
-            Some(
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../examples/pipelines/sample.dcraft"),
-            ),
-            WorkerConfig {
-                java: "unavailable-java".into(),
-                classpath_file: "unavailable-classpath".into(),
-            },
-            None,
-        )
-    }
-    #[test]
-    fn canvas_and_inspector_render_without_java_or_project_mutation() {
-        let mut app = app();
-        assert!(app.error.is_none());
-        let before = app.session.project().cloned();
-        let ctx = egui::Context::default();
-        app.selected = Some(Uuid::from_u128(2));
-        for _ in 0..3 {
-            let output = frame(&mut app, &ctx, Vec::new());
-            assert!(!output.shapes.is_empty());
-            let path_label = output
-                .shapes
-                .iter()
-                .find_map(|clipped| {
-                    if let egui::Shape::Text(text) = &clipped.shape {
-                        if text.galley.job.text == "Project path" {
-                            return Some((
-                                clipped.clip_rect,
-                                egui::Rect::from_min_size(text.pos, text.galley.size()),
-                            ));
-                        }
-                    }
-                    None
-                })
-                .expect("project path control must be painted");
-            assert!(
-                path_label.0.contains_rect(path_label.1),
-                "project path row must be visible inside toolbar"
-            );
-        }
-        assert_eq!(app.session.project(), before.as_ref());
-        assert!(!app.session.is_dirty());
-        assert!(app.session.current_job().is_none());
-    }
-    #[test]
-    fn failed_open_preserves_loaded_project_selection_and_view() {
-        let mut app = app();
-        let before = app.session.project().cloned();
-        app.selected = Some(Uuid::from_u128(2));
-        app.canvas.fit = false;
-        app.open(PathBuf::from("missing-desktop-fixture.dcraft"), false);
-        assert!(app.error.is_some());
-        assert_eq!(app.session.project(), before.as_ref());
-        assert_eq!(app.selected, Some(Uuid::from_u128(2)));
-        assert!(!app.canvas.fit);
-    }
-}
+mod tests;

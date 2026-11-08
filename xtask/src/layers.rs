@@ -98,7 +98,7 @@ struct DependencyKind {
 fn ui(name: &str) -> bool {
     matches!(
         name,
-        "egui" | "eframe" | "winit" | "iced" | "druid" | "tauri" | "slint"
+        "egui" | "eframe" | "winit" | "iced" | "druid" | "tauri" | "slint" | "rfd"
     ) || [
         "egui-", "egui_", "eframe-", "iced_", "iced-", "tauri-", "i-slint-",
     ]
@@ -288,6 +288,20 @@ fn cycles<'a>(
 mod tests {
     use super::*;
     use serde_json::{json, Value};
+    #[test]
+    fn native_file_dialogs_cannot_leak_into_headless_engine() {
+        let m = metadata(
+            vec![("engine", Some("engine")), ("wrapper", None), ("rfd", None)],
+            vec![
+                ("engine", "wrapper", None, None),
+                ("wrapper", "rfd", None, None),
+            ],
+        );
+        let errors = check(&m).unwrap();
+        assert!(errors
+            .iter()
+            .any(|e| e.contains("UI dependency") && e.contains("rfd")));
+    }
     fn metadata(
         packages: Vec<(&str, Option<&str>)>,
         edges: Vec<(&str, &str, Option<&str>, Option<&str>)>,

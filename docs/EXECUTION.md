@@ -53,7 +53,10 @@ wait_for_execution — блокирующий convenience API для CLI/тес�
 
 Project.open запрещён, пока job активен. Правки, undo/redo, save/save_as разрешены.
 Runtime config изменяет только будущие jobs. Старый результат после правки
-доступен, но result_is_current=false; revision не обнаруживает внешнее изменение
+доступен, но result_is_current=false после изменения вычислений. Move/Rename
+не инвалидируют результат: Session отдельно отслеживает computation revision,
+захваченную при Run. Computational Undo/Redo консервативно требуют нового Run.
+Project revision остаётся в record для аудита. Ревизии не обнаруживают внешнее изменение
 dataset. Конфигурация и история проекта не меняются из-за отмены или ошибки query.
 
 ## §5. Реализация
@@ -85,7 +88,7 @@ cargo run --locked -p datacraft-engine --example job_lifecycle -- examples/pipel
 ```
 
 Он ждёт регистрации worker, отправляет execution.cancel, ждёт подтверждённой
-очистки, запускает следующий job и редактирует имя проекта, пока работает
+очистки, запускает следующий job и редактирует Filter, пока работает
 snapshot. Затем проверяет stale revision. Это не имитация Spark.
 
 ## §8′. Устойчивость

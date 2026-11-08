@@ -752,8 +752,11 @@ mod tests {
             })
             .unwrap();
         session
-            .dispatch(crate::Command::Rename {
-                name: "While running".into(),
+            .dispatch(crate::Command::ConfigureNode {
+                node_id: Uuid::from_u128(2),
+                config: datacraft_core::NodeKind::Filter {
+                    expression: "quantity >= 5".into(),
+                },
             })
             .unwrap();
         assert!(

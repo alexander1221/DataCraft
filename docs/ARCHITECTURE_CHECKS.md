@@ -66,7 +66,7 @@ Production crates не зависят от tooling. Самослой разре�
 
 Для core/types/graph/nodes/project запрещена транзитивная DataFusion-family.
 Для всех headless layers и cli/mcp запрещены транзитивные UI families:
-egui/egui-*, eframe, winit, iced/iced_*, druid, tauri/tauri-*, slint/i-slint-*.
+egui/egui-*, eframe, winit, iced/iced_*, druid, tauri/tauri-*, slint/i-slint-*, rfd.
 ui не может непосредственно зависеть от DataFusion. Tooling освобождён от этих
 external bans, но его нельзя включать в production closure.
 Build/dev зависимости не получают исключения. Циклы проверяются по всем
