@@ -2,6 +2,26 @@
 
 Дата: 2026-11-08. Среда: Windows, PowerShell, Python 3.14.3.
 
+## GitHub Actions для 65bf9b0: Linux GUI prerequisite
+
+verified 2026-11-08 via GitHub Actions API, jobs/steps и лог rust job:
+[checks #4](https://github.com/alexander1221/DataCraft/actions/runs/42483156203).
+
+- Общий workflow — FAIL.
+- cargo xtask ci в rust job — PASS: fmt/check/test/Clippy, 81 Rust-тест,
+  layers, 18 commands, 9 nodes. Два следующих CLI discovery steps — SKIPPED
+  после отказа native smoke, не PASS.
+- spark job — PASS целиком: Scala tests, CSV/draft validation, четыре fixtures,
+  UI input → настоящий Spark (включая изменение Filter), inspect, job_lifecycle.
+- Linux native smoke под Xvfb — FAIL: xkbcommon-dl-0.4.2/src/x11.rs,
+  `Library libxkbcommon-x11.so could not be loaded`, exit 101.
+  Локальный исходник loader подтверждает попытку загрузить
+  libxkbcommon-x11.so.0 / libxkbcommon-x11.so. Это отдельная библиотека X11,
+  существующего libxkbcommon-dev в runner оказалось недостаточно.
+- В rust job добавлен пакет libxkbcommon-x11-dev. Xvfb/native smoke сохранён;
+  отказ не маскируется continue-on-error или пропуском проверки.
+  Повторный Linux запуск с исправленным workflow — NOT_RUN до нового push.
+
 ## Редактор нод, параметров и связей
 
 verified 2026-11-08 via локальные команды Windows/MSVC, Rust 1.99.1,

@@ -9,7 +9,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev xvfb
+      - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev libgl1-mesa-dev xvfb
       - run: cargo xtask ci
       - run: xvfb-run -a cargo run --locked -p datacraft-desktop -- examples/pipelines/sample.dcraft --smoke-frames 3
       - run: cargo run --locked -p datacraft-cli -- nodes --json
