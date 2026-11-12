@@ -528,6 +528,48 @@ fn save_as_rebases_existing_undo_snapshots() {
 }
 
 #[test]
+fn parquet_export_save_as_preserves_destination_across_undo_and_redo() {
+    let directory = tempfile::tempdir().unwrap();
+    let old = directory.path().join("old");
+    let new = directory.path().join("new");
+    std::fs::create_dir(&old).unwrap();
+    std::fs::create_dir(&new).unwrap();
+    let mut project = Project::from_json(include_str!(
+        "../../../examples/pipelines/parquet_export.dcraft"
+    ))
+    .unwrap();
+    if let NodeKind::ParquetExport { path, .. } = &mut project.graph.nodes[1].config {
+        *path = "output.parquet".into();
+    }
+    let initial = old.join("project.dcraft");
+    project.save(&initial).unwrap();
+    let mut session = Session::default();
+    session
+        .dispatch(Command::Open {
+            path: initial,
+            discard_changes: false,
+        })
+        .unwrap();
+    session.dispatch(move_node()).unwrap();
+    let next = new.join("copy.dcraft");
+    session
+        .dispatch(Command::SaveAs { path: next.clone() })
+        .unwrap();
+    for command in [Command::Undo, Command::Redo] {
+        session.dispatch(command).unwrap();
+        let resolved = session.project().unwrap().resolved(&next).unwrap();
+        let NodeKind::ParquetExport { path, .. } = &resolved.graph.nodes[1].config else {
+            panic!("expected export")
+        };
+        assert_eq!(
+            Path::new(path),
+            old.canonicalize().unwrap().join("output.parquet")
+        );
+    }
+    assert!(!old.join("output.parquet").exists());
+}
+
+#[test]
 fn json_source_save_as_rebases_history_and_unsaved_relative_path_is_rejected() {
     let dir = tempfile::tempdir().unwrap();
     let old = dir.path().join("old");

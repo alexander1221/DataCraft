@@ -15,6 +15,36 @@ fn public_catalog_matches_persistent_contract_and_ports() {
     // Independent contract table, not a snapshot generated from the registry.
     let expected = [
         (
+            "parquet_export",
+            vec![("table", PortType::Table)],
+            vec![],
+            true,
+        ),
+        (
+            "hdfs_import_parquet",
+            vec![],
+            vec![("table", PortType::Table)],
+            false,
+        ),
+        (
+            "hdfs_export_parquet",
+            vec![("table", PortType::Table)],
+            vec![],
+            true,
+        ),
+        (
+            "hdfs_import_text",
+            vec![],
+            vec![("table", PortType::Table)],
+            false,
+        ),
+        (
+            "hdfs_export_text",
+            vec![("table", PortType::Table)],
+            vec![],
+            true,
+        ),
+        (
             "feature_selection",
             vec![("table", PortType::Table)],
             vec![],

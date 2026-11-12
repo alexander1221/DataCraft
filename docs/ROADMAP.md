@@ -1,5 +1,13 @@
 # Дальнейшая разработка
 
+## HDFS/Parquet — 2026-11-12
+
+Реализованы HDFS Text import/export, remote browser, локальный Parquet Export
+и HDFS Parquet import/export. Всего 32 типа. Контракты — HDFS_TEXT.md/PARQUET_IO.md;
+фактические проверки — VALIDATION.md. Следующие задачи: ручная приёмка HDFS-форм,
+partitioned Parquet datasets, затем сохранение/загрузка fitted моделей.
+TLS/Kerberos требуют отдельного стенда и текущим simple-auth Hadoop не проверены.
+
 ## Текущий фундамент
 
 Поузловой запуск с постоянным worker, materialized session cache, инвалидацией

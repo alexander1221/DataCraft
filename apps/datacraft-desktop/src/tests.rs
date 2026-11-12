@@ -1,4 +1,8 @@
 use super::*;
+#[cfg(feature = "hdfs-integration-tests")]
+mod hdfs;
+#[cfg(feature = "spark-integration-tests")]
+mod parquet;
 
 fn text_position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
     output

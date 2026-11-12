@@ -46,6 +46,12 @@ pub enum Command {
     RunNode { node_id: Uuid },
     #[serde(rename = "execution.downstream.run")]
     RunDownstream { node_id: Uuid },
+    #[serde(rename = "data.hdfs.list")]
+    HdfsList {
+        node_id: Uuid,
+        config: NodeKind,
+        path: String,
+    },
     #[serde(rename = "execution.cancel")]
     Cancel { job_id: Uuid },
     #[serde(rename = "execution.status")]
@@ -303,6 +309,25 @@ pub const COMMANDS: &[CommandSpec] = &[
         undoable: false,
         parameters: &[NODE_ID],
     },
+    CommandSpec {
+        id: "data.hdfs.list",
+        label: "Browse HDFS",
+        mutates_project: false,
+        undoable: false,
+        parameters: &[
+            NODE_ID,
+            CommandParameter {
+                name: "config",
+                parameter_type: CommandParameterType::NodeConfig,
+                required: true,
+            },
+            CommandParameter {
+                name: "path",
+                parameter_type: CommandParameterType::String,
+                required: true,
+            },
+        ],
+    },
 ];
 
 impl Command {
@@ -329,6 +354,7 @@ impl Command {
             Self::New { .. } => 17,
             Self::RunNode { .. } => 18,
             Self::RunDownstream { .. } => 19,
+            Self::HdfsList { .. } => 20,
         }]
     }
 }

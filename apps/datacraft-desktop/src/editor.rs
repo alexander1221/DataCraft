@@ -23,6 +23,11 @@ struct Field {
 pub enum EditorAction {
     Apply,
     Revert,
+    BrowseHdfs,
+    BrowseDestination {
+        parameter: &'static str,
+        format: crate::file_dialog::SourceFormat,
+    },
     Browse {
         parameter: &'static str,
         format: crate::file_dialog::SourceFormat,
@@ -34,6 +39,7 @@ pub struct ParameterEditor {
     pub original: NodeKind,
     fields: Vec<Field>,
     baseline: Vec<FieldValue>,
+    connections: Vec<(String, NodeKind)>,
 }
 
 impl ParameterEditor {
@@ -72,6 +78,7 @@ impl ParameterEditor {
             original: node.config.clone(),
             fields,
             baseline,
+            connections: Vec::new(),
         })
     }
 
@@ -80,6 +87,42 @@ impl ParameterEditor {
             .iter()
             .map(|f| &f.value)
             .ne(self.baseline.iter())
+    }
+    pub fn set_connections(&mut self, connections: Vec<(String, NodeKind)>) {
+        self.connections = connections;
+    }
+    pub fn set_hdfs_path(&mut self, path: String) -> Result<(), String> {
+        let field = self
+            .fields
+            .iter_mut()
+            .find(|f| f.spec.name == "hdfs_path")
+            .ok_or("Not an HDFS node")?;
+        field.value = FieldValue::String(path);
+        Ok(())
+    }
+    fn copy_connection(&mut self, config: &NodeKind) -> Result<(), String> {
+        let json = serde_json::to_value(config).map_err(|e| e.to_string())?;
+        for field in &mut self.fields {
+            if [
+                "connection_name",
+                "host",
+                "port",
+                "protocol",
+                "authentication",
+                "username",
+                "timeout_seconds",
+            ]
+            .contains(&field.spec.name)
+            {
+                let value = json.get(field.spec.name).ok_or("Invalid HDFS connection")?;
+                field.value = if field.spec.parameter_type == ParameterType::UnsignedInteger {
+                    FieldValue::Number(value.to_string())
+                } else {
+                    FieldValue::String(value.as_str().ok_or("Invalid HDFS field")?.into())
+                };
+            }
+        }
+        Ok(())
     }
 
     pub fn revert(&mut self) {
@@ -181,18 +224,108 @@ impl ParameterEditor {
 
     fn show_fields(&mut self, ui: &mut egui::Ui) -> Option<EditorAction> {
         let mut action = None;
+        let hdfs = self.original.spec().id.starts_with("hdfs_");
+        if hdfs {
+            let mut selected = None;
+            egui::ComboBox::from_id_salt("hdfs_connection")
+                .selected_text("Copy existing connection…")
+                .show_ui(ui, |ui| {
+                    for (i, (name, _)) in self.connections.iter().enumerate() {
+                        if ui.selectable_label(false, name).clicked() {
+                            selected = Some(i);
+                        }
+                    }
+                });
+            if let Some(i) = selected {
+                let config = self.connections[i].1.clone();
+                if let Err(error) = self.copy_connection(&config) {
+                    ui.colored_label(egui::Color32::RED, error);
+                }
+            }
+            ui.small(
+                "WebHDFS: none or Simple user. No stored secrets or Kerberos password emulation.",
+            );
+            if self.original.spec().id.ends_with("_text") {
+                ui.small(
+                    "Use \\t, \\n, \\r, \\\\ for separators. Default quoting doubles close quotes.",
+                );
+            }
+            if ui.button("Browse HDFS…").clicked() {
+                action = Some(EditorAction::BrowseHdfs);
+            }
+        }
+        let simple = self
+            .fields
+            .iter()
+            .find(|f| f.spec.name == "authentication")
+            .is_some_and(|f| matches!(&f.value,FieldValue::String(v) if v=="simple"));
         let source_format = match self.original {
             NodeKind::CsvSource { .. } => Some(crate::file_dialog::SourceFormat::Csv),
-            NodeKind::ParquetSource { .. } => Some(crate::file_dialog::SourceFormat::Parquet),
+            NodeKind::ParquetSource { .. } | NodeKind::ParquetExport { .. } => {
+                Some(crate::file_dialog::SourceFormat::Parquet)
+            }
             NodeKind::JsonSource { .. } => Some(crate::file_dialog::SourceFormat::Json),
             _ => None,
         };
         for field in &mut self.fields {
+            if hdfs && field.spec.name == "username" && !simple {
+                continue;
+            }
             ui.push_id(field.spec.name, |ui| {
                 ui.strong(field.spec.label);
+                if hdfs && (field.spec.name == "delimiter" || field.spec.name == "record_separator")
+                {
+                    if let FieldValue::String(value) = &mut field.value {
+                        let presets: &[(&str, &str)] = if field.spec.name == "delimiter" {
+                            &[
+                                ("Tab", "\\t"),
+                                ("Space", " "),
+                                ("Comma", ","),
+                                ("Semicolon", ";"),
+                            ]
+                        } else {
+                            &[
+                                ("Unix (LF)", "\\n"),
+                                ("Windows (CRLF)", "\\r\\n"),
+                                ("Mac (CR)", "\\r"),
+                            ]
+                        };
+                        let label = presets
+                            .iter()
+                            .find(|(_, text)| *text == value)
+                            .map_or("Other / custom", |(name, _)| *name);
+                        egui::ComboBox::from_id_salt("separator_preset")
+                            .selected_text(label)
+                            .show_ui(ui, |ui| {
+                                for (name, text) in presets {
+                                    ui.selectable_value(value, (*text).into(), *name);
+                                }
+                            });
+                    }
+                }
                 match &mut field.value {
                     FieldValue::String(value) | FieldValue::Number(value) => {
-                        ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY));
+                        let choices = if hdfs || self.original.spec().id == "parquet_export" {
+                            field.spec.rules.iter().find_map(|r| match r {
+                                ParameterRule::OneOf { values } => Some(*values),
+                                _ => None,
+                            })
+                        } else {
+                            None
+                        };
+                        if let Some(choices) = choices {
+                            egui::ComboBox::from_id_salt("choice")
+                                .selected_text(value.as_str())
+                                .show_ui(ui, |ui| {
+                                    for choice in choices {
+                                        ui.selectable_value(value, (*choice).into(), *choice);
+                                    }
+                                });
+                        } else if hdfs && field.spec.name == "column_options" {
+                            column_options(ui, value);
+                        } else {
+                            ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY));
+                        }
                         if field
                             .spec
                             .rules
@@ -201,9 +334,16 @@ impl ParameterEditor {
                         {
                             if let Some(format) = source_format {
                                 if ui.small_button("Browse…").clicked() {
-                                    action = Some(EditorAction::Browse {
-                                        parameter: field.spec.name,
-                                        format,
+                                    action = Some(if self.original.spec().id == "parquet_export" {
+                                        EditorAction::BrowseDestination {
+                                            parameter: field.spec.name,
+                                            format,
+                                        }
+                                    } else {
+                                        EditorAction::Browse {
+                                            parameter: field.spec.name,
+                                            format,
+                                        }
                                     });
                                 }
                             }
@@ -241,6 +381,9 @@ impl ParameterEditor {
         if self.fields.is_empty() {
             ui.label("This node has no parameters");
         }
+        if self.original.spec().id == "hdfs_export_text" {
+            ui.small("Table has column names and scalar values; long names, row names, value labels and spreadsheet display formats are unavailable.");
+        }
         ui.horizontal(|ui| {
             if ui
                 .add_enabled(self.is_dirty(), egui::Button::new("Apply"))
@@ -262,9 +405,152 @@ impl ParameterEditor {
     }
 }
 
+fn column_options(ui: &mut egui::Ui, value: &mut String) {
+    let Ok(mut options) = serde_json::from_str::<Vec<Map<String, Value>>>(value) else {
+        ui.colored_label(
+            egui::Color32::RED,
+            "Invalid column options JSON. Correct it before applying.",
+        );
+        ui.text_edit_multiline(value);
+        return;
+    };
+    let before = options.clone();
+    let mut remove = None;
+    ui.small("Indexes refer to original columns, starting at 1.");
+    for (index, option) in options.iter_mut().enumerate() {
+        ui.push_id(index, |ui| {
+            ui.group(|ui| {
+                let mut column = option.get("column").and_then(Value::as_u64).unwrap_or(1);
+                ui.horizontal(|ui| {
+                    ui.label("Column");
+                    if ui
+                        .add(egui::DragValue::new(&mut column).range(1..=10000))
+                        .changed()
+                    {
+                        option.insert("column".into(), column.into());
+                    }
+                    if ui.small_button("Remove override").clicked() {
+                        remove = Some(index);
+                    }
+                });
+                for (key, label) in [
+                    ("name", "Rename"),
+                    ("input_format", "Date pattern (e.g. dd.MM.uuuu)"),
+                    ("missing_value", "Replace missing value"),
+                ] {
+                    let mut enabled = option.contains_key(key);
+                    if ui.checkbox(&mut enabled, label).changed() {
+                        if enabled {
+                            option.insert(key.into(), "".into());
+                        } else {
+                            option.remove(key);
+                        }
+                    }
+                    if enabled {
+                        let mut text = option
+                            .get(key)
+                            .and_then(Value::as_str)
+                            .unwrap_or("")
+                            .to_owned();
+                        if ui.text_edit_singleline(&mut text).changed() {
+                            option.insert(key.into(), text.into());
+                        }
+                    }
+                }
+                let mut data_type = option
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("auto")
+                    .to_owned();
+                egui::ComboBox::from_id_salt("column_type")
+                    .selected_text(&data_type)
+                    .show_ui(ui, |ui| {
+                        for choice in ["auto", "string", "long", "double", "boolean", "date"] {
+                            if ui
+                                .selectable_value(&mut data_type, choice.into(), choice)
+                                .changed()
+                            {
+                                option.insert("type".into(), data_type.clone().into());
+                            }
+                        }
+                    });
+                for (key, label) in [
+                    ("omit", "Omit column"),
+                    ("remove_non_numeric", "Remove non-numeric characters"),
+                ] {
+                    let mut enabled = option.get(key).and_then(Value::as_bool).unwrap_or(false);
+                    if ui.checkbox(&mut enabled, label).changed() {
+                        option.insert(key.into(), enabled.into());
+                    }
+                }
+                let mut length = option
+                    .get("text_length")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                ui.horizontal(|ui| {
+                    ui.label("Text length limit (0 = none)");
+                    if ui
+                        .add(egui::DragValue::new(&mut length).range(0..=16777216))
+                        .changed()
+                    {
+                        option.insert("text_length".into(), length.into());
+                    }
+                });
+            });
+        });
+    }
+    if let Some(index) = remove {
+        options.remove(index);
+    }
+    if ui.small_button("Add column override").clicked() {
+        let next = (1_u64..=10000).find(|n| {
+            !options
+                .iter()
+                .any(|v| v.get("column").and_then(Value::as_u64) == Some(*n))
+        });
+        if let Some(column) = next {
+            options.push(Map::from_iter([("column".into(), column.into())]));
+        }
+    }
+    if options != before {
+        match serde_json::to_string(&options) {
+            Ok(text) => *value = text,
+            Err(error) => {
+                ui.colored_label(egui::Color32::RED, error.to_string());
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hdfs_connection_copy_and_remote_selection_are_reversible_inspector_buffers() {
+        let source = datacraft_core::find_node("hdfs_import_text")
+            .unwrap()
+            .create_config(
+                serde_json::from_value(serde_json::json!({"hdfs_path":"/original.tsv"})).unwrap(),
+            )
+            .unwrap();
+        let connection=datacraft_core::find_node("hdfs_export_text").unwrap().create_config(
+            serde_json::from_value(serde_json::json!({"hdfs_path":"/unrelated-output.tsv","host":"cluster.test","port":9871,
+                "protocol":"swebhdfs","authentication":"simple","username":"analyst","connection_name":"Cluster","timeout_seconds":90})).unwrap()).unwrap();
+        let mut editor = editor(source.clone());
+        editor.copy_connection(&connection).unwrap();
+        editor.set_hdfs_path("/picked.tsv".into()).unwrap();
+        assert!(editor.is_dirty());
+        assert_eq!(editor.original, source);
+        let value = serde_json::to_value(editor.config().unwrap()).unwrap();
+        assert_eq!(value["kind"], "hdfs_import_text");
+        assert_eq!(value["host"], "cluster.test");
+        assert_eq!(value["port"], 9871);
+        assert_eq!(value["hdfs_path"], "/picked.tsv");
+        assert_eq!(value["skip_rows"], 0);
+        editor.revert();
+        assert!(!editor.is_dirty());
+        assert_eq!(editor.config().unwrap(), source);
+    }
     fn editor(kind: NodeKind) -> ParameterEditor {
         ParameterEditor::new(&Node {
             id: Uuid::from_u128(1),

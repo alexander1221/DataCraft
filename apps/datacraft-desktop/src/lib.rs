@@ -2,6 +2,7 @@
 mod canvas;
 mod editor;
 mod file_dialog;
+mod hdfs_browser;
 mod layout;
 pub use layout::arranged_positions;
 
@@ -34,6 +35,7 @@ pub struct Desktop {
     allow_close: bool,
     smoke_frames: Option<u32>,
     frames: u32,
+    hdfs_browser: Option<hdfs_browser::Browser>,
 }
 
 struct RenameDraft {
@@ -64,6 +66,7 @@ impl Desktop {
             allow_close: false,
             smoke_frames,
             frames: 0,
+            hdfs_browser: None,
         };
         if let Some(path) = project {
             app.open(path, false);
@@ -121,6 +124,9 @@ impl Desktop {
         self.session
             .current_job()
             .is_some_and(|j| !j.status.is_terminal())
+    }
+    fn choosing_file(&self) -> bool {
+        self.file_dialogs.is_busy() || self.hdfs_browser.is_some()
     }
 
     fn request_file(&mut self, purpose: FilePurpose, initial_path: Option<PathBuf>) {
@@ -182,6 +188,9 @@ impl Desktop {
             }
             FilePurpose::Source {
                 node_id, parameter, ..
+            }
+            | FilePurpose::Destination {
+                node_id, parameter, ..
             } => {
                 if self.selected != Some(node_id) {
                     self.error = Some(
@@ -207,7 +216,7 @@ impl Desktop {
     }
 
     fn begin_rename(&mut self) {
-        if self.file_dialogs.is_busy() || self.has_unapplied() {
+        if self.choosing_file() || self.has_unapplied() {
             return;
         }
         if let Some(project) = self.session.project() {
@@ -391,7 +400,7 @@ impl Desktop {
                         self.session
                             .project()
                             .is_some_and(|p| !p.graph.nodes.is_empty())
-                            && !self.file_dialogs.is_busy()
+                            && !self.choosing_file()
                             && !self.has_unapplied(),
                         egui::Button::new("Arrange"),
                     )
@@ -402,7 +411,7 @@ impl Desktop {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     let enabled = self.session.project().is_some()
                         && !self.has_unapplied()
-                        && !self.file_dialogs.is_busy();
+                        && !self.choosing_file();
                     for spec in builtin_nodes() {
                         if ui
                             .add_enabled(enabled, egui::Button::new(spec.label))
@@ -455,7 +464,7 @@ impl Desktop {
 
     fn request_close(&mut self, ctx: &egui::Context) {
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        if self.file_dialogs.is_busy() {
+        if self.choosing_file() {
             self.status = "Close the file dialog before exiting DataCraft".into();
         } else if self.rename.is_some() {
             self.error = Some("Finish or cancel renaming before closing the project".into());
@@ -467,7 +476,7 @@ impl Desktop {
     }
 
     fn toolbar(&mut self, ctx: &egui::Context) {
-        let choosing = self.file_dialogs.is_busy();
+        let choosing = self.choosing_file();
         self.canvas.execution = self.session.node_statuses();
         self.canvas.run_enabled = !self.active_job() && !self.has_unapplied() && !choosing;
         egui::TopBottomPanel::top("toolbar")
@@ -625,6 +634,32 @@ impl Desktop {
 
     fn inspector(&mut self, ctx: &egui::Context) {
         self.sync_editor();
+        let connections = self
+            .session
+            .project()
+            .map(|p| {
+                p.graph
+                    .nodes
+                    .iter()
+                    .filter(|n| n.config.spec().id.starts_with("hdfs_"))
+                    .filter_map(|n| {
+                        let value = serde_json::to_value(&n.config).ok()?;
+                        Some((
+                            format!(
+                                "{} ({}:{})",
+                                value["connection_name"].as_str().unwrap_or("HDFS"),
+                                value["host"].as_str().unwrap_or(""),
+                                value["port"]
+                            ),
+                            n.config.clone(),
+                        ))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        if let Some(editor) = &mut self.editor {
+            editor.set_connections(connections);
+        }
         let node = self
             .selected
             .and_then(|id| {
@@ -665,11 +700,14 @@ impl Desktop {
                         ui.strong("Parameters");
                         if let Some(editor) = &mut self.editor {
                             editor_action = ui
-                                .add_enabled_ui(!self.file_dialogs.is_busy(), |ui| editor.show(ui))
+                                .add_enabled_ui(
+                                    !self.file_dialogs.is_busy() && self.hdfs_browser.is_none(),
+                                    |ui| editor.show(ui),
+                                )
                                 .inner;
                         }
                         ui.separator();
-                        let pending = self.has_unapplied() || self.file_dialogs.is_busy();
+                        let pending = self.has_unapplied() || self.choosing_file();
                         if ui
                             .add_enabled(!pending, egui::Button::new("Delete node"))
                             .clicked()
@@ -780,16 +818,43 @@ impl Desktop {
                     self.error = None;
                     self.status = "Parameter edits reverted".into();
                 }
-                EditorAction::Browse { parameter, format } => {
+                EditorAction::BrowseHdfs => {
+                    if self.active_job() {
+                        self.error =
+                            Some("Wait for execution or cancel it before browsing HDFS".into());
+                    } else if let Some(editor) = &self.editor {
+                        match editor.config() {
+                            Ok(config) => {
+                                self.hdfs_browser = Some(hdfs_browser::Browser::new(
+                                    editor.node_id,
+                                    self.session.revision(),
+                                    config,
+                                    &mut self.session,
+                                ))
+                            }
+                            Err(error) => self.error = Some(error),
+                        }
+                    }
+                }
+                EditorAction::Browse { parameter, format }
+                | EditorAction::BrowseDestination { parameter, format } => {
                     if let Some(editor) = &self.editor {
                         let initial = editor
                             .local_path(parameter)
                             .and_then(|path| file_dialog::source_start(path, self.session.path()));
                         self.request_file(
-                            FilePurpose::Source {
-                                node_id: editor.node_id,
-                                parameter,
-                                format,
+                            if matches!(action, EditorAction::BrowseDestination { .. }) {
+                                FilePurpose::Destination {
+                                    node_id: editor.node_id,
+                                    parameter,
+                                    format,
+                                }
+                            } else {
+                                FilePurpose::Source {
+                                    node_id: editor.node_id,
+                                    parameter,
+                                    format,
+                                }
                             },
                             initial,
                         );
@@ -985,6 +1050,28 @@ impl Desktop {
                 _ => {}
             }
         }
+        if let Some(mut browser) = self.hdfs_browser.take() {
+            match browser.show(ctx, &mut self.session) {
+                Some(hdfs_browser::Action::Select(path)) => {
+                    if self.session.revision() == browser.revision {
+                        if let Some(editor) =
+                            self.editor.as_mut().filter(|e| e.node_id == browser.node)
+                        {
+                            if let Err(error) = editor.set_hdfs_path(path) {
+                                self.error = Some(error);
+                            }
+                        }
+                    } else {
+                        self.error = Some(
+                            "Project changed while browsing HDFS; selection was discarded".into(),
+                        );
+                    }
+                    browser.close(&mut self.session);
+                }
+                Some(hdfs_browser::Action::Close) => browser.close(&mut self.session),
+                None => self.hdfs_browser = Some(browser),
+            }
+        }
         if let Some(selection) = self.file_dialogs.poll(ctx) {
             self.handle_file_selection(selection, ctx);
         }
@@ -1002,7 +1089,7 @@ impl Desktop {
         self.results(ctx);
         self.inspector(ctx);
         self.palette(ctx);
-        let choosing = self.file_dialogs.is_busy();
+        let choosing = self.choosing_file();
         let actions = egui::CentralPanel::default()
             .show(ctx, |ui| {
                 if choosing {
@@ -1048,7 +1135,7 @@ impl Desktop {
             self.editor = None;
         }
         self.dialogs(ctx);
-        if self.active_job() || self.file_dialogs.is_busy() {
+        if self.active_job() || self.choosing_file() {
             ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
@@ -1066,7 +1153,7 @@ impl eframe::App for Desktop {
             && !self.has_unsaved()
             && !self.active_job()
             && !self.allow_close
-            && !self.file_dialogs.is_busy()
+            && !self.choosing_file()
         {
             println!(
                 "Native startup: {} frames, project loaded: {}",

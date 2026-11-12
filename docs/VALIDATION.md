@@ -1,5 +1,44 @@
 # Проверки первой реализации
 
+## HDFS Text и локальный/HDFS Parquet — 2026-11-12
+
+verified 2026-11-12 via Windows 11/MSVC, Rust 1.99.1, Temurin JDK 21.0.13,
+Scala 2.13.16, Spark 4.0.1 и настоящий Hadoop 3.3.6 NameNode/DataNode.
+Контракты: [HDFS_TEXT.md](HDFS_TEXT.md), [PARQUET_IO.md](PARQUET_IO.md).
+
+| Проверка | Результат |
+|---|---|
+| `cargo xtask --offline ci` | PASS: fmt/check/test/Clippy, layers/commands/nodes; 131 Rust tests, один subprocess fixture ignored и отдельно вызывается тестом |
+| `cargo clippy --workspace --all-targets --all-features --locked --offline -- -D warnings` | PASS |
+| Scala production/tests compilation | PASS: установленный Scala compiler, cached classpath |
+| Scala/MUnit через JUnit, `DATACRAFT_HDFS_TESTS=1` | PASS: 60 tests, включая реальные WebHDFS OPEN/CREATE redirects |
+| GUI `--features hdfs-integration-tests run_button -- --test-threads=1` | PASS: 9 сценариев, включая HDFS Text и оба Parquet round-trip |
+| `cargo xtask --offline fixtures` | PASS: все 16 известных pipeline, схемы/значения совпали с независимыми эталонами |
+| CLI `parquet_export`, `parquet_import`, `hdfs_export_parquet`, `hdfs_import_parquet` | PASS: стандартный worker classpath, успешные sinks без таблиц, оба import вернули ожидаемые 12 строк |
+| `hdfs_lifecycle` example | PASS: export/import, 12 точных строк, browser/отмена не меняют результаты и persistent cache |
+| Native desktop `hdfs_export_parquet.dcraft --smoke-frames 3` | PASS: 3 frames, project loaded |
+| `validate_generated.py .` | PASS: 0 errors; это дополнительная проверка файлов, не замена компиляции |
+| `sbt test writeClasspath` в sandbox | NOT_RUN: boot-cache lock недоступен; реальная compilation/MUnit выполнены напрямую теми же cached Scala/Spark dependencies |
+| Ручной OS picker, визуальная приёмка всех новых настроек | NOT_RUN: GUI tests используют egui input и injected picker replies |
+| Linux/macOS нового пакета, удалённые Actions, TLS/Kerberos | NOT_RUN |
+| Независимое ревью другим человеком/агентом | NOT_RUN |
+| `git diff --check` | PASS |
+| Staging/commit | BLOCKED: `.git/index.lock: Permission denied`; sandbox предоставляет `.git` только для чтения. Изменения остаются в рабочей папке |
+
+Независимые ожидания: Text — exact UTF-8 bytes, Unicode/quotes/nulls, ANSI/decimal/
+date/skip/limit; ошибки прав/сети/формата, запрет overwrite и cleanup своих tmp.
+Parquet — magic PAR1, footer row count/codec, Decimal(38,10), int64 > 2^53,
+dates/timestamp, nulls, arrays/maps, ML VectorUDT и metadata. Проверены четыре
+заявленных кодека, пустые таблицы и сохранность назначения при ошибке.
+Worker wire и Rust ResultTable сохраняют точные numeric JSON tokens.
+
+Найденные при разработке ошибки компиляции тестов, float-deserialization с
+lossless JSON и wrapped Hadoop diagnostics исправлены; перечисленные финальные
+прогоны прошли. HDFS stand запущен пользователем; Docker API агенту недоступен.
+Новый Compose прошёл `config --quiet`, запуск именно этого Compose локально
+NOT_RUN. Тесты использовали пользовательский stand с опубликованным DataNode.
+Workflow включает собственный disposable stand; удалённый успех не заявляется.
+
 ## Контуры статусов без цветной заливки — 2026-11-09
 
 PASS: 30 desktop unit tests, fmt check, Clippy desktop all-targets/all-features

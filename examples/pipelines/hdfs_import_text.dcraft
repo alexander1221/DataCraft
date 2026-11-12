@@ -1,0 +1,65 @@
+{
+  "format_version": 1,
+  "name": "Import sales from HDFS",
+  "nodes": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "position": [
+        0,
+        0
+      ],
+      "config": {
+        "connection_name": "Local HDFS",
+        "host": "localhost",
+        "port": 9870,
+        "protocol": "webhdfs",
+        "authentication": "simple",
+        "username": "hadoop",
+        "timeout_seconds": 30,
+        "hdfs_path": "/datacraft/examples/sales.tsv",
+        "delimiter": "\\t",
+        "delimiter_match_all": true,
+        "ignore_consecutive_delimiters": false,
+        "record_separator": "\\n",
+        "record_match_all": true,
+        "header": true,
+        "encoding": "UTF-8",
+        "decimal_separator": ".",
+        "null_value": "",
+        "quote_start": "\"",
+        "quote_end": "\"",
+        "record_escape": "",
+        "delimiter_escape": "",
+        "quote_start_escape": "",
+        "quote_end_escape": "\"",
+        "max_field_chars": 1048576,
+        "kind": "hdfs_import_text",
+        "skip_rows": 0,
+        "max_rows": 0,
+        "skip_blank_lines": true,
+        "infer_schema": true,
+        "column_options": "[]"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "position": [
+        340,
+        0
+      ],
+      "config": {
+        "kind": "table_preview",
+        "rows": 20
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "00000000-0000-0000-0000-000000000001",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000002",
+      "to_port": "table"
+    }
+  ],
+  "output_node": "00000000-0000-0000-0000-000000000002"
+}

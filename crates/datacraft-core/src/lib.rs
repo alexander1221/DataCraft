@@ -4,14 +4,118 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod hdfs;
 pub mod registry;
 pub use registry::{builtin_nodes, find_node, NodeSpec, ParameterError};
 
 pub const MAX_PREVIEW_ROWS: u32 = 1000;
 
+// Tagged enums buffer values through serde Content. Decode JSON's lossless Number
+// representation explicitly before converting algorithm parameters to f64.
+fn deserialize_parameter_number<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<f64, D::Error> {
+    let number = serde_json::Number::deserialize(deserializer)?;
+    number
+        .as_f64()
+        .filter(|value| value.is_finite())
+        .ok_or_else(|| serde::de::Error::custom("expected a finite floating-point parameter"))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum NodeKind {
+    ParquetExport {
+        path: String,
+        overwrite: bool,
+        create_parents: bool,
+        compression: String,
+        row_group_mb: u32,
+    },
+    HdfsImportParquet {
+        connection_name: String,
+        host: String,
+        port: u32,
+        protocol: String,
+        authentication: String,
+        username: String,
+        timeout_seconds: u32,
+        hdfs_path: String,
+    },
+    HdfsExportParquet {
+        connection_name: String,
+        host: String,
+        port: u32,
+        protocol: String,
+        authentication: String,
+        username: String,
+        timeout_seconds: u32,
+        hdfs_path: String,
+        overwrite: bool,
+        create_parents: bool,
+        compression: String,
+        row_group_mb: u32,
+    },
+    HdfsImportText {
+        connection_name: String,
+        host: String,
+        port: u32,
+        protocol: String,
+        authentication: String,
+        username: String,
+        timeout_seconds: u32,
+        hdfs_path: String,
+        delimiter: String,
+        delimiter_match_all: bool,
+        ignore_consecutive_delimiters: bool,
+        record_separator: String,
+        record_match_all: bool,
+        header: bool,
+        encoding: String,
+        decimal_separator: String,
+        null_value: String,
+        quote_start: String,
+        quote_end: String,
+        record_escape: String,
+        delimiter_escape: String,
+        quote_start_escape: String,
+        quote_end_escape: String,
+        max_field_chars: u32,
+        skip_rows: u32,
+        max_rows: u32,
+        skip_blank_lines: bool,
+        infer_schema: bool,
+        column_options: String,
+    },
+    HdfsExportText {
+        connection_name: String,
+        host: String,
+        port: u32,
+        protocol: String,
+        authentication: String,
+        username: String,
+        timeout_seconds: u32,
+        hdfs_path: String,
+        delimiter: String,
+        delimiter_match_all: bool,
+        ignore_consecutive_delimiters: bool,
+        record_separator: String,
+        record_match_all: bool,
+        header: bool,
+        encoding: String,
+        decimal_separator: String,
+        null_value: String,
+        quote_start: String,
+        quote_end: String,
+        record_escape: String,
+        delimiter_escape: String,
+        quote_start_escape: String,
+        quote_end_escape: String,
+        max_field_chars: u32,
+        overwrite: bool,
+        create_parents: bool,
+        use_english_numbers: bool,
+    },
     CsvSource {
         path: String,
         header: bool,
@@ -25,6 +129,7 @@ pub enum NodeKind {
     },
     TrainTestSplit {
         key_columns: Vec<String>,
+        #[serde(deserialize_with = "deserialize_parameter_number")]
         train_fraction: f64,
         seed: u32,
     },
@@ -62,7 +167,9 @@ pub enum NodeKind {
         features_column: String,
         fit_intercept: bool,
         max_iter: u32,
+        #[serde(deserialize_with = "deserialize_parameter_number")]
         reg_param: f64,
+        #[serde(deserialize_with = "deserialize_parameter_number")]
         elastic_net_param: f64,
     },
     GeneralizedLinearRegression {
@@ -72,6 +179,7 @@ pub enum NodeKind {
         link: String,
         fit_intercept: bool,
         max_iter: u32,
+        #[serde(deserialize_with = "deserialize_parameter_number")]
         reg_param: f64,
     },
     DecisionTreeRegressor {
@@ -102,8 +210,11 @@ pub enum NodeKind {
         features_column: String,
         fit_intercept: bool,
         max_iter: u32,
+        #[serde(deserialize_with = "deserialize_parameter_number")]
         reg_param: f64,
+        #[serde(deserialize_with = "deserialize_parameter_number")]
         elastic_net_param: f64,
+        #[serde(deserialize_with = "deserialize_parameter_number")]
         threshold: f64,
     },
     LinearSvc {
@@ -111,7 +222,9 @@ pub enum NodeKind {
         features_column: String,
         fit_intercept: bool,
         max_iter: u32,
+        #[serde(deserialize_with = "deserialize_parameter_number")]
         reg_param: f64,
+        #[serde(deserialize_with = "deserialize_parameter_number")]
         threshold: f64,
     },
     DecisionTreeClassifier {
@@ -144,6 +257,7 @@ pub enum NodeKind {
         columns: Vec<String>,
         categorical_columns: Vec<String>,
         num_buckets: u32,
+        #[serde(deserialize_with = "deserialize_parameter_number")]
         relative_error: f64,
     },
     FeatureSelectionPipeline {
@@ -151,6 +265,7 @@ pub enum NodeKind {
         columns: Vec<String>,
         categorical_columns: Vec<String>,
         num_buckets: u32,
+        #[serde(deserialize_with = "deserialize_parameter_number")]
         relative_error: f64,
         num_top_features: u32,
         output_column: String,
@@ -186,6 +301,11 @@ pub enum PortType {
 impl NodeKind {
     pub fn spec(&self) -> &'static NodeSpec {
         match self {
+            Self::ParquetExport { .. } => &registry::PARQUET_EXPORT,
+            Self::HdfsImportParquet { .. } => &registry::HDFS_PARQUET_IMPORT,
+            Self::HdfsExportParquet { .. } => &registry::HDFS_PARQUET_EXPORT,
+            Self::HdfsImportText { .. } => &registry::HDFS_IMPORT,
+            Self::HdfsExportText { .. } => &registry::HDFS_EXPORT,
             Self::CsvSource { .. } => &registry::CSV,
             Self::ParquetSource { .. } => &registry::PARQUET,
             Self::JsonSource { .. } => &registry::JSON,

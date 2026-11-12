@@ -481,6 +481,36 @@ impl JobManager {
         })
     }
 
+    pub(crate) fn start_hdfs_list(
+        &mut self,
+        config: datacraft_core::NodeKind,
+        path: String,
+        revision: u64,
+        worker_config: WorkerConfig,
+        options: JobOptions,
+    ) -> Result<JobInfo, JobError> {
+        self.spawn(revision, options, move |control| {
+            if control.stop_reason().is_some() {
+                return Err(EngineError::Protocol("cancelled before browsing".into()).into());
+            }
+            control.stage(ExecutionStage::StartingWorker);
+            let mut worker = Worker::start(&worker_config.java, &worker_config.classpath_file)?;
+            control.install_worker(worker.cancellation_handle());
+            let outcome = if control.stop_reason().is_none() {
+                control.stage(ExecutionStage::Executing);
+                worker.list_hdfs(&config, &path)
+            } else {
+                Err(EngineError::Protocol("cancelled before browsing".into()))
+            };
+            control.stage(ExecutionStage::StoppingWorker);
+            worker.cancel()?;
+            Ok(ExecutionRecord {
+                project_revision: revision,
+                result: outcome?,
+            })
+        })
+    }
+
     fn spawn<F>(
         &mut self,
         revision: u64,

@@ -1,5 +1,20 @@
 # Реестр встроенных нод
 
+## HDFS и Parquet
+
+| kind | Порты | Особенности |
+|---|---|---|
+| hdfs_import_text | — → Table | WebHDFS, формат текста, column overrides, spool |
+| hdfs_export_text | Table → — | один текстовый файл, overwrite=false |
+| parquet_export | Table → — | один локальный бинарный файл |
+| hdfs_import_parquet | — → Table | один remote Parquet, локальный spool |
+| hdfs_export_parquet | Table → — | бинарный файл и безопасная публикация |
+
+Connection fields сохраняются в .dcraft без secrets; hdfs_path — абсолютный путь
+в HDFS. Browser использует data.hdfs.list. Копирование подключения переносит
+только поля соединения. Все defaults/ограничения доступны в `nodes --json`.
+Контракты: [HDFS_TEXT.md](HDFS_TEXT.md), [PARQUET_IO.md](PARQUET_IO.md).
+
 ## §1. Задача и инварианты
 
 NodeSpec — единый декларативный контракт встроенных нод для создания,
@@ -121,6 +136,6 @@ config.validate_parameters()?;
 ## §8′. Устойчивость
 
 Ошибки пользователя возвращаются как Result, без panic. Реестр конечный,
-27 нод; поиск линейный. Parameter validation не читает datasets, не запускает
+32 ноды; поиск линейный. Parameter validation не читает datasets, не запускает
 JVM и не оценивает SQL. Проверка непустого local path не гарантирует существование
 файла. Реестр не доказывает универсальную bounded-memory работу Spark.

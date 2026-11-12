@@ -215,6 +215,9 @@ fn execute(cli: Cli) -> Result<(), Box<dyn Error>> {
     let record = session
         .job_result(job_id)?
         .ok_or("completed job has no result")?;
+    if record.result.tables.is_empty() {
+        println!("Completed successfully (no table output)");
+    }
     for table in &record.result.tables {
         println!("\n{}", table.name);
         println!("Schema: {}", table.schema);

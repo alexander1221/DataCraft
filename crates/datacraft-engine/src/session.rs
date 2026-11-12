@@ -111,6 +111,7 @@ pub struct Session {
     last_execution: Option<Arc<ExecutionRecord>>,
     nodes: NodeRuntime,
     settled_job: Option<Uuid>,
+    auxiliary_job: Option<Uuid>,
 }
 
 impl Default for Session {
@@ -138,6 +139,7 @@ impl Session {
             last_execution: None,
             nodes: NodeRuntime::default(),
             settled_job: None,
+            auxiliary_job: None,
         }
     }
     pub fn from_project(mut project: Project, history_limit: usize) -> Result<Self, SessionError> {
@@ -208,12 +210,17 @@ impl Session {
                     info.status,
                     crate::jobs::JobStatus::Cancelled | crate::jobs::JobStatus::TimedOut
                 );
-                if cancelled {
+                if cancelled && Some(info.id) != self.auxiliary_job {
                     self.nodes.lost_worker();
                 }
-                self.nodes
-                    .settle(info.error.as_ref().and_then(|e| e.node), cancelled);
+                if Some(info.id) != self.auxiliary_job {
+                    self.nodes
+                        .settle(info.error.as_ref().and_then(|e| e.node), cancelled);
+                }
                 self.settled_job = Some(info.id);
+            }
+            if Some(info.id) == self.auxiliary_job {
+                return;
             }
             if let Ok(Some(record)) = self.jobs.result(info.id) {
                 if !self
@@ -260,12 +267,18 @@ impl Session {
             Command::Undo if !self.can_undo() => Some("undo history is empty"),
             Command::Redo if !self.can_redo() => Some("redo history is empty"),
             Command::Save if self.path.is_none() => Some("no save path; use save_as"),
-            Command::Run { .. } | Command::RunNode { .. } | Command::RunDownstream { .. }
+            Command::Run { .. }
+            | Command::RunNode { .. }
+            | Command::RunDownstream { .. }
+            | Command::HdfsList { .. }
                 if self.jobs.is_busy() =>
             {
                 Some("another execution job is active")
             }
-            Command::Run { .. } | Command::RunNode { .. } | Command::RunDownstream { .. }
+            Command::Run { .. }
+            | Command::RunNode { .. }
+            | Command::RunDownstream { .. }
+            | Command::HdfsList { .. }
                 if self.worker_config.is_none() =>
             {
                 Some("worker is not configured")
@@ -414,6 +427,7 @@ impl Session {
                             let source = match &node.config {
                                 NodeKind::CsvSource { path, .. }
                                 | NodeKind::ParquetSource { path }
+                                | NodeKind::ParquetExport { path, .. }
                                 | NodeKind::JsonSource { path } => Some(path),
                                 _ => None,
                             };
@@ -459,6 +473,7 @@ impl Session {
                             let source = match &node.config {
                                 NodeKind::CsvSource { path, .. }
                                 | NodeKind::ParquetSource { path }
+                                | NodeKind::ParquetExport { path, .. }
                                 | NodeKind::JsonSource { path } => Some(path),
                                 _ => None,
                             };
@@ -484,6 +499,34 @@ impl Session {
                     )?;
                     self.pending_execution_revision =
                         Some((self.revision, self.computation_revision));
+                    CommandPayload::JobStarted {
+                        job_id: info.id,
+                        project_revision: info.project_revision,
+                    }
+                }
+                Command::HdfsList {
+                    node_id,
+                    config,
+                    path,
+                } => {
+                    if !self.current()?.graph.nodes.iter().any(|n| n.id == node_id) {
+                        return Err(GraphError::MissingNode(node_id).into());
+                    }
+                    if !config.spec().id.starts_with("hdfs_") {
+                        return Err(GraphError::InvalidOutput(node_id).into());
+                    }
+                    let worker = self.worker_config.clone().ok_or(SessionError::Disabled {
+                        command: id,
+                        reason: "worker is not configured",
+                    })?;
+                    let info = self.jobs.start_hdfs_list(
+                        config,
+                        path,
+                        self.revision,
+                        worker,
+                        self.job_options,
+                    )?;
+                    self.auxiliary_job = Some(info.id);
                     CommandPayload::JobStarted {
                         job_id: info.id,
                         project_revision: info.project_revision,
@@ -569,6 +612,7 @@ fn resolved_snapshot(project: &Project, path: &Path) -> Project {
             let source = match &mut node.config {
                 NodeKind::CsvSource { path, .. }
                 | NodeKind::ParquetSource { path }
+                | NodeKind::ParquetExport { path, .. }
                 | NodeKind::JsonSource { path } => path,
                 _ => continue,
             };
@@ -687,6 +731,7 @@ fn rebase(project: &mut Project, old: &Path, new: &Path) {
         let path = match &mut node.config {
             NodeKind::CsvSource { path, .. }
             | NodeKind::ParquetSource { path }
+            | NodeKind::ParquetExport { path, .. }
             | NodeKind::JsonSource { path } => path,
             _ => continue,
         };

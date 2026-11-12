@@ -48,6 +48,14 @@ fn registry_matches_every_json_command_and_parameter_contract() {
             path: "copy.dcraft".into(),
         },
         Command::Run { output: None },
+        Command::HdfsList {
+            node_id: id,
+            config: datacraft_core::find_node("hdfs_import_text")
+                .unwrap()
+                .create_draft_config()
+                .unwrap(),
+            path: "/".into(),
+        },
         Command::RunNode { node_id: id },
         Command::RunDownstream { node_id: id },
         Command::Cancel { job_id: id },

@@ -5,7 +5,8 @@
 desktop-клиент на eframe/egui для просмотра графа и запуска preview.
 
 **Статус:** работают визуальный редактор, подготовка/отбор признаков, регрессия и классификация.
-Проверены 111 Rust-тестов и 40 Scala/MUnit-тестов с настоящим Spark на Windows/JDK 21.
+Проверены 131 Rust-тест, 60 Scala/MUnit-тестов и 9 GUI/Spark-сценариев
+на Windows/JDK 21, включая настоящий HDFS для Text/Parquet import/export.
 Rust fmt/check/Clippy и архитектурные проверки прошли; CSV/JSON preview,
 обучение, предсказание и fit/transform проверены через Rust CLI → worker.
 В текущей sandbox sbt заблокирован доступом к boot-кэшу; Scala скомпилирована
@@ -17,7 +18,7 @@ Rust fmt/check/Clippy и архитектурные проверки прошл�
 
 - UUID-идентификаторы нод, типизированные порты `Table` и `Model`, проверка DAG,
   обязательных входов, параметров, повторных соединений и ссылок.
-- Единый NodeSpec для 27 нод: порты/cardinality, параметры, defaults и
+- Единый NodeSpec для 32 нод: порты/cardinality, параметры, defaults и
   ограничения. Discovery через `datacraft nodes --json` без JVM.
 - JSON-проекты `.dcraft` версии 1 с координатами нод и относительными путями.
 - Сохранение черновиков с незаполненными параметрами/входами; диагностика
@@ -28,6 +29,10 @@ Rust fmt/check/Clippy и архитектурные проверки прошл�
 - Один фоновый job, Job ID, polling статуса/событий, отмена и timeout.
   Вычисления работают на snapshot проекта; редактирование остаётся доступным.
 - CSV, Parquet, NDJSON, Filter (Spark SQL expression), Select Columns, Limit, Table Preview.
+- HDFS Text import/export: WebHDFS, none/Simple, настройки формата и remote browser.
+- Локальный Parquet Export и HDFS Parquet import/export: один бинарный файл,
+  Snappy/Gzip/Zstd/uncompressed, явные overwrite и create_parents.
+  Контракты: [HDFS_TEXT](docs/HDFS_TEXT.md), [PARQUET_IO](docs/PARQUET_IO.md).
 - Train/Test Split с seed и стабильными ключами; RFormula Design Matrix,
   Index Categoricals, Reference Code Categoricals и fitted Transform без повторного fit.
 - Assemble Features для чисел и ML-векторов, Linear Regression, Predict.
@@ -45,7 +50,7 @@ Rust fmt/check/Clippy и архитектурные проверки прошл�
 - CLI `validate`, `run`, `inspect`; ошибки приводят к ненулевому exit code.
 - `cargo xtask`: контроль зависимостей слоёв, реестров команд/нод и эталонных
   pipeline через настоящий Spark с проверкой схем и значений.
-- Desktop: New/Open/Save, палитра 27 типов нод, создание/удаление, canvas
+- Desktop: New/Open/Save, палитра 32 типов нод, создание/удаление, canvas
   со связями, выбор/перемещение, редактируемые параметры с Apply/Revert,
   Connect/Disconnect, Undo/Redo, Run/Cancel и таблица результатов.
 - Асинхронные системные Open/Save as, Browse для CSV/Parquet/JSON и переименование

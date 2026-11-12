@@ -1,0 +1,43 @@
+{
+  "format_version": 1,
+  "name": "parquet_export",
+  "nodes": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "position": [
+        0,
+        0
+      ],
+      "config": {
+        "kind": "csv_source",
+        "path": "../data/sales.csv",
+        "header": true,
+        "infer_schema": true
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "position": [
+        340,
+        0
+      ],
+      "config": {
+        "kind": "parquet_export",
+        "path": "../../artifacts/sales.parquet",
+        "overwrite": false,
+        "create_parents": true,
+        "compression": "snappy",
+        "row_group_mb": 64
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "00000000-0000-0000-0000-000000000001",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000002",
+      "to_port": "table"
+    }
+  ],
+  "output_node": "00000000-0000-0000-0000-000000000002"
+}

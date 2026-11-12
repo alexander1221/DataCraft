@@ -176,6 +176,17 @@ impl Worker {
         self.exchange(request_id, request, order, progress)
     }
 
+    pub(crate) fn list_hdfs(
+        &mut self,
+        config: &datacraft_core::NodeKind,
+        path: &str,
+    ) -> Result<ExecutionResult, EngineError> {
+        let request_id = Uuid::new_v4();
+        let request = serde_json::json!({"protocol_version":PROTOCOL_VERSION,"request_id":request_id,
+            "operation":"hdfs_list","config":config,"path":path});
+        self.exchange(request_id, request, &[], |_, _| {})
+    }
+
     fn exchange(
         &mut self,
         request_id: Uuid,

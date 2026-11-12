@@ -8,7 +8,7 @@ import org.apache.spark.ml.Transformer
 import org.apache.spark.ml.linalg.SQLDataTypes
 import org.apache.spark.ml.regression.LinearRegression
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
-import org.apache.spark.sql.functions.col
+import org.apache.spark.sql.functions.{col,struct,to_json}
 import org.apache.spark.sql.types.{DoubleType, NumericType, StringType, StructType}
 import org.apache.spark.storage.StorageLevel
 import scala.collection.mutable
@@ -20,16 +20,19 @@ object Worker {
   val ProtocolVersion = 1
   val MaxPreviewRows = 1000
   val MaxResponseBytes = 8 * 1024 * 1024
+  private def isExport(kind:String):Boolean=Set("hdfs_export_text","hdfs_export_parquet","parquet_export").contains(kind)
 
   /** Runtime-only state: never serialized into project files. */
   final class Cache {
     val tables = mutable.Map.empty[(String, String), DataFrame]
     val models = mutable.Map.empty[String, Transformer]
     val tokens = mutable.Map.empty[String, String]
+    val spools = mutable.Map.empty[String, Path]
     def remove(node: String): Unit = {
       tables.keys.filter(_._1 == node).toVector.foreach { key => tables.remove(key).foreach(_.unpersist(false)) }
       models.remove(node)
       tokens.remove(node)
+      spools.remove(node).foreach(Files.deleteIfExists)
     }
   }
 
@@ -52,7 +55,7 @@ object Worker {
         }) catch {
           case NonFatal(error) => failure(Null, None, error)
         }
-        protocol.println(ujson.write(response))
+        protocol.println(encodeResponse(response))
         protocol.flush()
       }
     } finally {
@@ -92,18 +95,34 @@ object Worker {
 
   private def finite(value: Double): Value = if (value.isNaN || value.isInfinity) Null else Num(value)
 
+  private def encodeTable(table:Value):String = table.obj.get("__raw_rows") match {
+    case Some(rows)=>
+      "{\"name\":"+ujson.write(table("name"))+",\"schema\":"+table("__raw_schema").str+
+        ",\"rows\":["+rows.arr.map(_.str).mkString(",")+"]}"
+    case None=>ujson.write(table)
+  }
+  /** Preserve Spark JSON numeric tokens; routing data through ujson.Num would round int64/decimal. */
+  def encodeResponse(response:Value):String = response.obj.get("tables") match {
+    case Some(tables)=>
+      val header=Obj.from(response.obj.iterator.filter(_._1!="tables"))
+      ujson.write(header).dropRight(1)+",\"tables\":["+tables.arr.map(encodeTable).mkString(",")+"]}"
+    case None=>ujson.write(response)
+  }
+
   private def preview(name: String, df: DataFrame, rows: Int): Value = {
     require(rows >= 1 && rows <= MaxPreviewRows, "Preview rows must be between 1 and 1000")
     // Both row and total response byte limits apply. Wide values can still be expensive in Spark.
     val bounded = df.limit(rows)
     val fields = df.schema.fieldNames
-    val values = bounded.toJSON.collect().map { json =>
+    val raw = bounded.select(to_json(struct(fields.toSeq.map(exactColumn):_*),Map("ignoreNullFields"->"false"))).collect().map(_.getString(0))
+    val values = raw.map { json =>
       val row = ujson.read(json)
       // Spark's JSON generator omits null fields by default; preserve table cells.
       fields.foreach(name => if (!row.obj.contains(name)) row(name) = Null)
       row
     }
-    Obj("name" -> name, "schema" -> ujson.read(df.schema.json), "rows" -> Arr.from(values))
+    Obj("name" -> name, "schema" -> ujson.read(df.schema.json), "rows" -> Arr.from(values),
+      "__raw_rows"->Arr.from(raw),"__raw_schema"->Str(df.schema.json))
   }
 
   private def report(spark: SparkSession, name: String, columns: Seq[String], rows: Seq[Seq[Value]]): Value = {
@@ -119,9 +138,14 @@ object Worker {
       emit: Value => Unit = _ => ()): Value = {
     val id = request.obj.getOrElse("request_id", Null)
     var activeNode: Option[String] = None
+    val requestSpools = mutable.Buffer.empty[Path]
     try {
       UUID.fromString(id.str)
       require(request("protocol_version").num == ProtocolVersion, "Unsupported protocol version")
+      if(request("operation").str=="hdfs_list") {
+        val listing=HdfsClient.list(request("config"),request("path").str)
+        return Obj("protocol_version"->ProtocolVersion,"request_id"->id,"ok"->true,"tables"->Arr(listing))
+      }
       val cached = request("operation").str == "run_nodes"
       require(cached || request("operation").str == "run", "Unsupported operation")
       val project = request("project")
@@ -170,6 +194,19 @@ object Worker {
         if (cached) results = Vector.empty
         val config = nodes.getOrElse(node, throw new IllegalArgumentException(s"Unknown node $node"))
         config("kind").str match {
+          case "hdfs_import_parquet" =>
+            val (df,spool)=ParquetIO.readHdfs(spark,config)
+            if(cached) cache.spools(node)=spool else requestSpools+=spool
+            table(node,df)
+          case "hdfs_export_parquet" => ParquetIO.writeHdfs(input(node),config)
+          case "parquet_export" => ParquetIO.writeLocal(input(node),config)
+          case "hdfs_import_text" =>
+            val imported=HdfsText.read(spark,config)
+            if(cached) cache.spools(node)=imported.spool else requestSpools+=imported.spool
+            table(node,imported.table)
+          case "hdfs_export_text" =>
+            require(cached || node==output,"HDFS export must be an execution target")
+            HdfsText.write(input(node),config)
           case "csv_source" =>
             val path = localPath(config("path").str)
             table(node, spark.read.option("header", config("header").bool)
@@ -290,22 +327,22 @@ object Worker {
             if (results.isEmpty && models.contains(node)) results = Vector(
               report(spark, "Model", Seq("node", "status"), Seq(Seq(Str(node), Str("fitted")))))
           }
-          require(!expose || results.nonEmpty, s"Node $node produced no result")
+          require(!expose || results.nonEmpty || isExport(config("kind").str), s"Node $node produced no result")
           cache.tokens(node) = tokens.getOrElse(node, throw new IllegalArgumentException("Missing cache token"))
           progress(node, "completed")
           // Return bounded terminal reports/previews; intermediate data stays in Spark.
           if (expose) {
             allResults ++= results.map { table => table("name") = Str(s"${table("name").str} [$node]"); table }
-            require(ujson.write(Arr.from(allResults)).getBytes(StandardCharsets.UTF_8).length < MaxResponseBytes - 1024,
+            require(allResults.map(encodeTable).mkString("[",",","]").getBytes(StandardCharsets.UTF_8).length < MaxResponseBytes - 1024,
               "Preview exceeds 8 MiB response limit; run fewer terminal nodes or reduce preview width")
           }
         } else progress(node, "prepared")
       }
       if (cached) results = allResults
-      require(results.nonEmpty, "Selected output produced no result tables")
+      require(results.nonEmpty || isExport(nodes(output)("kind").str), "Selected output produced no result tables")
       val response = Obj("protocol_version" -> ProtocolVersion, "request_id" -> id,
         "ok" -> true, "tables" -> Arr.from(results))
-      require(ujson.write(response).getBytes(StandardCharsets.UTF_8).length < MaxResponseBytes,
+      require(encodeResponse(response).getBytes(StandardCharsets.UTF_8).length < MaxResponseBytes,
         "Preview exceeds 8 MiB response limit; select fewer columns or rows")
       response
     } catch {
@@ -313,6 +350,7 @@ object Worker {
         if (request.obj.get("operation").exists(_.str == "run_nodes")) activeNode.foreach(cache.remove)
         failure(id, activeNode, error)
     } finally {
+      requestSpools.foreach(p=>try Files.deleteIfExists(p) catch {case NonFatal(_)=>System.err.println("DataCraft: import spool retained for cleanup")})
       spark.sparkContext.clearJobGroup()
     }
   }

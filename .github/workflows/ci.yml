@@ -17,6 +17,8 @@ jobs:
 
   spark:
     runs-on: ubuntu-latest
+    env:
+      DATACRAFT_HDFS_TESTS: '1'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -26,12 +28,29 @@ jobs:
       - uses: sbt/setup-sbt@v1
       - uses: dtolnay/rust-toolchain@stable
       - run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+      - run: docker compose -p datacraft-hdfs-ci -f examples/hdfs/docker-compose.yml up -d
+      - name: Wait for real HDFS
+        shell: bash
+        run: |
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent 'http://localhost:9870/jmx?qry=Hadoop:service=NameNode,name=NameNodeInfo' | python3 -c 'import json,sys; s=json.load(sys.stdin)["beans"][0]; sys.exit(0 if json.loads(s["LiveNodes"]) and not s["Safemode"] else 1)'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          docker compose -p datacraft-hdfs-ci -f examples/hdfs/docker-compose.yml logs
+          exit 1
       - run: sbt test writeClasspath
         working-directory: workers/spark
       - run: cargo run --locked -p datacraft-cli -- validate examples/pipelines/sample.dcraft
       - run: cargo run --locked -p datacraft-cli -- validate examples/pipelines/draft.dcraft --draft
       - run: cargo xtask fixtures
       - run: cargo test --locked -p datacraft-desktop --features spark-integration-tests run_button -- --test-threads=1
+      - run: cargo test --locked -p datacraft-desktop --features hdfs-integration-tests hdfs_run_button -- --test-threads=1
       - run: cargo run --locked -p datacraft-cli -- inspect examples/data/sales.csv
       - run: cargo run --locked -p datacraft-engine --example job_lifecycle -- examples/pipelines/sample.dcraft
       - run: cargo run --locked -p datacraft-engine --example node_lifecycle
+      - run: cargo run --locked -p datacraft-engine --example hdfs_lifecycle
+      - name: Stop disposable HDFS
+        if: always()
+        run: docker compose -p datacraft-hdfs-ci -f examples/hdfs/docker-compose.yml down

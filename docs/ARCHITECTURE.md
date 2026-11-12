@@ -1,5 +1,20 @@
 # Архитектура DataCraft
 
+## HDFS и файловый экспорт
+
+HdfsClient в Scala использует Hadoop WebHdfsFileSystem с DataNode redirects.
+DelimitedText/HdfsText выполняют потоковый parsing и текстовую сериализацию;
+ParquetIO — ParquetWriter и Spark ParquetWriteSupport 4.0.1. Новых runtime
+dependencies нет. Локальный export пишет один файл через JDK NIO.
+HDFS imports используют локальный spool до завершения query/cache; worker
+удаляет его при инвалидации. Hard kill может оставить OS temporary file.
+UI не делает HTTP-запросы: browser — фоновая команда Session.
+
+Экспорт имеет side effect: undo графа не отменяет файл. Перезапись по умолчанию
+запрещена. Публикация выполняется rename после закрытия temporary file;
+существующее назначение заранее не удаляется. Remote access — явная опция
+HDFS-нод. Обычные local pipelines не требуют сети. Secrets и Kerberos отсутствуют.
+
 ## Компоненты
 
 ```text

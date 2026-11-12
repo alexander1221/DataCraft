@@ -28,6 +28,11 @@ pub enum Purpose {
         parameter: &'static str,
         format: SourceFormat,
     },
+    Destination {
+        node_id: Uuid,
+        parameter: &'static str,
+        format: SourceFormat,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -83,7 +88,10 @@ impl FileDialogs {
             return;
         };
         let mut dialog = rfd::AsyncFileDialog::new().set_parent(parent);
-        let save = matches!(request.purpose, Purpose::SaveProject { .. });
+        let save = matches!(
+            request.purpose,
+            Purpose::SaveProject { .. } | Purpose::Destination { .. }
+        );
         dialog = match request.purpose {
             Purpose::OpenProject => dialog
                 .set_title("Open DataCraft project")
@@ -91,6 +99,16 @@ impl FileDialogs {
             Purpose::SaveProject { .. } => dialog
                 .set_title("Save DataCraft project as")
                 .add_filter("DataCraft projects", &["dcraft"]),
+            Purpose::Destination { format, .. } => {
+                let (label, extensions) = match format {
+                    SourceFormat::Parquet => ("Parquet data", &["parquet"][..]),
+                    SourceFormat::Csv => ("CSV data", &["csv"][..]),
+                    SourceFormat::Json => ("JSON data", &["json"][..]),
+                };
+                dialog
+                    .set_title("Choose export destination")
+                    .add_filter(label, extensions)
+            }
             Purpose::Source {
                 format: SourceFormat::Json,
                 ..
@@ -125,7 +143,12 @@ impl FileDialogs {
                 }
             }
         } else if save {
-            dialog = dialog.set_file_name("project.dcraft");
+            dialog =
+                dialog.set_file_name(if matches!(request.purpose, Purpose::Destination { .. }) {
+                    "data.parquet"
+                } else {
+                    "project.dcraft"
+                });
         }
         // Construct the rfd task here (main thread); polling it does not block egui.
         let future: DialogFuture = if save {

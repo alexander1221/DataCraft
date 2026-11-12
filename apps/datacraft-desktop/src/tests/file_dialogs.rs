@@ -202,6 +202,45 @@ fn browse_uses_source_format_and_only_changes_the_target_inspector_buffer() {
 }
 
 #[test]
+fn parquet_destination_picker_accepts_a_new_file_and_keeps_it_in_the_inspector_until_apply() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    app.add_node("parquet_export");
+    let node = app.selected.unwrap();
+    let before = app.session.project().cloned();
+    click_label(&mut app, &ctx, "Browse…");
+    let request = app.file_dialogs.take_queued_for_test().unwrap();
+    assert_eq!(
+        request.purpose,
+        FilePurpose::Destination {
+            node_id: node,
+            parameter: "path",
+            format: SourceFormat::Parquet
+        }
+    );
+    let directory = tempfile::tempdir().unwrap();
+    let destination = directory.path().join("new-output.parquet");
+    assert!(!destination.exists());
+    app.handle_file_selection(
+        FileSelection {
+            request,
+            path: Some(destination.clone()),
+        },
+        &ctx,
+    );
+    assert_eq!(app.session.project(), before.as_ref());
+    assert!(app.apply_parameters());
+    assert_eq!(
+        app.editor.as_ref().unwrap().local_path("path"),
+        destination.to_str()
+    );
+    assert!(
+        !destination.exists(),
+        "Choosing a destination must not create a file"
+    );
+}
+
+#[test]
 fn stale_revision_and_wrong_node_results_cannot_change_another_project_or_field() {
     let mut app = app();
     let ctx = egui::Context::default();

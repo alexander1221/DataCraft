@@ -110,6 +110,7 @@ impl Project {
             let path = match &mut node.config {
                 NodeKind::CsvSource { path, .. }
                 | NodeKind::ParquetSource { path }
+                | NodeKind::ParquetExport { path, .. }
                 | NodeKind::JsonSource { path } => path,
                 _ => continue,
             };

@@ -4,6 +4,68 @@ use std::{fs, path::Path};
 const SAMPLE: &str = include_str!("../../../examples/pipelines/sample.dcraft");
 
 #[test]
+fn hdfs_examples_save_load_and_resolve_without_rebasing_remote_paths() {
+    for text in [
+        include_str!("../../../examples/pipelines/hdfs_import_text.dcraft"),
+        include_str!("../../../examples/pipelines/hdfs_export_text.dcraft"),
+        include_str!("../../../examples/pipelines/hdfs_import_parquet.dcraft"),
+        include_str!("../../../examples/pipelines/hdfs_export_parquet.dcraft"),
+    ] {
+        let project = Project::from_json(text).unwrap();
+        project.validate().unwrap();
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("hdfs.dcraft");
+        project.save(&path).unwrap();
+        let loaded = Project::load(&path).unwrap();
+        assert_eq!(loaded, project);
+        let resolved = loaded.resolved(&path).unwrap();
+        for original in &project.graph.nodes {
+            if original.config.spec().id.starts_with("hdfs_") {
+                assert_eq!(
+                    resolved
+                        .graph
+                        .nodes
+                        .iter()
+                        .find(|n| n.id == original.id)
+                        .unwrap()
+                        .config,
+                    original.config
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn local_parquet_destination_resolves_against_project_without_requiring_an_existing_file() {
+    let text = include_str!("../../../examples/pipelines/parquet_export.dcraft");
+    let mut project = Project::from_json(text).unwrap();
+    let datacraft_core::NodeKind::ParquetExport { path, .. } = &mut project.graph.nodes[1].config
+    else {
+        panic!("expected sink")
+    };
+    *path = "new-output.parquet".into();
+    project.validate().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("export.dcraft");
+    project.save(&file).unwrap();
+    assert_eq!(Project::load(&file).unwrap(), project);
+    let resolved = project.resolved(&file).unwrap();
+    let datacraft_core::NodeKind::ParquetExport { path, .. } = &resolved.graph.nodes[1].config
+    else {
+        panic!("expected sink")
+    };
+    assert!(Path::new(path).is_absolute());
+    assert_eq!(
+        Path::new(path),
+        dir.path()
+            .canonicalize()
+            .unwrap()
+            .join("new-output.parquet")
+    );
+}
+
+#[test]
 fn preprocessing_examples_round_trip_and_resolve_json_paths() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/pipelines");
     for name in [

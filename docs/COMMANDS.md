@@ -1,5 +1,10 @@
 # Session и команды
 
+Read-only `data.hdfs.list` использует отдельный краткоживущий worker в общей
+очереди одного job. Browser не меняет Project, revision, undo, последний pipeline
+result и поузловой кэш. Отмена сохраняет idle cached worker. Выбор файла меняет
+буфер инспектора; persistent mutation выполняет Apply.
+
 ## §1. Задача и инварианты
 
 Session — headless application facade. Project выдаётся только по неизменяемой
@@ -50,8 +55,9 @@ Metadata отделена от handlers. Все доступные команд�
 | execution.downstream.run | нода и все потомки; внешние входы должны быть сохранены | нет |
 | execution.cancel | запросить остановку текущего Job ID | нет |
 | execution.status | получить JobInfo | нет |
+| data.hdfs.list | фоновый read-only WebHDFS browser: node_id/config/path | нет |
 
-В реестре 20 команд. New принимает name и optional discard_changes (default false).
+В реестре 21 команда. New принимает name и optional discard_changes (default false).
 Пустое имя отвергается без изменения Session. New/Open запрещены при активном
 job, очищают history, завершённый job и предыдущие результаты. New сбрасывает
 path и saved checkpoint; до SaveAs проект dirty. Revision возрастает.

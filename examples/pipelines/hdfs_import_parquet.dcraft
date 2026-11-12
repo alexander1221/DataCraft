@@ -1,0 +1,44 @@
+{
+  "format_version": 1,
+  "name": "hdfs_import_parquet",
+  "nodes": [
+    {
+      "id": "00000000-0000-0000-0000-000000000001",
+      "position": [
+        0,
+        0
+      ],
+      "config": {
+        "kind": "hdfs_import_parquet",
+        "connection_name": "Local HDFS",
+        "host": "localhost",
+        "port": 9870,
+        "protocol": "webhdfs",
+        "authentication": "simple",
+        "username": "hadoop",
+        "timeout_seconds": 30,
+        "hdfs_path": "/datacraft/examples/sales.parquet"
+      }
+    },
+    {
+      "id": "00000000-0000-0000-0000-000000000002",
+      "position": [
+        340,
+        0
+      ],
+      "config": {
+        "kind": "table_preview",
+        "rows": 20
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "00000000-0000-0000-0000-000000000001",
+      "from_port": "table",
+      "to": "00000000-0000-0000-0000-000000000002",
+      "to_port": "table"
+    }
+  ],
+  "output_node": "00000000-0000-0000-0000-000000000002"
+}
