@@ -1,5 +1,19 @@
 # Проверки первой реализации
 
+## Actions коммита 02826a8 и исправление проверки путей — 2026-11-12
+
+[Run 43176628251](https://github.com/alexander1221/DataCraft/actions/runs/43176628251):
+Spark job PASS целиком, включая sbt test, настоящий HDFS, fixtures, GUI tests
+и lifecycle examples. Rust job FAIL в тесте
+`parquet_export_save_as_preserves_destination_across_undo_and_redo`:
+Linux сохраняет `new/../old` в пути отсутствующего файла; тест сравнивал строки.
+Последующие Rust Clippy/architecture и native smoke в этом job не запускались.
+
+Тест исправлен: проверяет абсолютность, имя назначения и canonicalize существующего
+родительского каталога, не создавая output file. Production code не изменён.
+Локально PASS: все 17 Session tests, fmt check и git diff check.
+Удалённый Linux-прогон исправления NOT_RUN до нового commit/push.
+
 ## HDFS Text и локальный/HDFS Parquet — 2026-11-12
 
 verified 2026-11-12 via Windows 11/MSVC, Rust 1.99.1, Temurin JDK 21.0.13,

@@ -561,9 +561,14 @@ fn parquet_export_save_as_preserves_destination_across_undo_and_redo() {
         let NodeKind::ParquetExport { path, .. } = &resolved.graph.nodes[1].config else {
             panic!("expected export")
         };
+        // The destination does not exist yet. Resolve its existing parent:
+        // Unix may preserve `new/../old` while Windows normalizes that spelling.
+        let destination = Path::new(path);
+        assert!(destination.is_absolute());
+        assert_eq!(destination.file_name().unwrap(), "output.parquet");
         assert_eq!(
-            Path::new(path),
-            old.canonicalize().unwrap().join("output.parquet")
+            destination.parent().unwrap().canonicalize().unwrap(),
+            old.canonicalize().unwrap()
         );
     }
     assert!(!old.join("output.parquet").exists());
